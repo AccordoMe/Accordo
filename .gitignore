@@ -1,0 +1,22 @@
+# Rust build output (desktop and core) — tens of GB, rebuilt by cargo
+target/
+
+# Desktop release archives (AccordoDesktop/scripts/package-linux.sh)
+/AccordoDesktop/dist/
+
+# Android / Gradle build output and machine-specific settings
+.gradle/
+.kotlin/
+build/
+local.properties
+# Built by AccordoAndroid/scripts/build-apk.sh from accordo-core
+/AccordoAndroid/app/src/main/jniLibs/
+/kotlin-out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store

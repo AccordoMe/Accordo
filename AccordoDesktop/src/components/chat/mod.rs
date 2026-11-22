@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Chat pieces (src/components/chat/).
+
+pub mod attach_picker;
+pub mod browse_rooms;
+pub mod cheque_card;
+pub mod chat_header;
+pub mod chat_sidebar;
+pub mod composer;
+pub mod display;
+#[cfg(feature = "drops")]
+pub mod drop_card;
+pub mod emoji_picker;
+pub mod group_teaser;
+pub mod fund_cards;
+pub mod invoice_card;
+pub mod join_invite;
+pub mod manage_room;
+pub mod media_cards;
+pub mod media_picker;
+pub mod msg_render;
+pub mod members_sidebar;
+pub mod message_list;
+pub mod new_chat_modal;
+pub mod pinned_modal;
+pub mod poll_card;
+pub mod recorder_ui;
+pub mod room_avatar;
+pub mod thread_panel;
+pub mod timestamp;
+pub mod user_profile;

@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Shared pieces (the web app's src/components/).
+
+pub mod admin_view;
+pub mod app_settings_modal;
+pub mod chat;
+pub mod contact_picker;
+pub mod desktop;
+pub mod devtools_panel;
+pub mod equal_row;
+pub mod fit_column;
+pub mod file_picker;
+pub mod finance;
+pub mod form;
+pub mod hover;
+pub mod key_backup_modal;
+pub mod module_window;
+pub mod layout;
+pub mod org_modal;
+pub mod overlay;
+pub mod chain_settings;
+pub mod privacy_screen;
+pub mod time_picker;
+pub mod token_picker;
+pub mod tx_review;
+pub mod quick_switcher;
+pub mod select_text;
+pub mod page_tabs;
+pub mod settings;
+pub mod sidebar;
+pub mod toast;
+pub mod top_bar;
+pub mod ui;
+pub mod wallet_panel;

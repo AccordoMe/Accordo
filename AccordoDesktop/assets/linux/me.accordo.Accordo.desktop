@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Accordo
+GenericName=Messenger
+Comment=Encrypted messenger with crypto payments in the chat
+Exec=accordo-native
+Icon=me.accordo.Accordo
+Terminal=false
+Categories=Network;InstantMessaging;
+Keywords=chat;messenger;crypto;wallet;cheque;invoice;
+StartupWMClass=me.accordo.Accordo
+StartupNotify=true

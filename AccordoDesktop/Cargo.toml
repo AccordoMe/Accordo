@@ -1,0 +1,76 @@
+[package]
+name = "accordo-native"
+version = "0.1.0"
+edition = "2021"
+# The oldest compiler the dependencies take (sysinfo). Distro packages (apt's rustc) are often older:
+# install Rust with rustup (README → Building).
+rust-version = "1.95"
+description = "Accordo desktop client, native Rust UI (prototype)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+# The shared core: API client, E2EE primitives, the logging protocol (also built for Android).
+accordo-core = { path = "../accordo-core" }
+aes-gcm = "0.10"
+alloy-consensus = "1"
+alloy-eips = "1"
+alloy-primitives = "1"
+alloy-signer = "1"
+alloy-signer-local = "1"
+alloy-sol-types = "1"
+base64 = "0.22"
+bip39 = "3.0.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+getrandom = "0.4.3"
+hmac = "0.12"
+iced = { version = "0.14", features = ["advanced", "svg", "tokio", "image-without-codecs", "canvas"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+keyring = "4.2.0"
+mime_guess = "2.0.5"
+open = "5.4.5"
+p256 = { version = "0.13", features = ["ecdh", "jwk"] }
+# The vault's PBKDF2: its own optimised build with assembly SHA-256, fast in debug builds too
+# (the generic pbkdf2 crate is compiled into this crate, unoptimised in dev: ~3 s per unlock).
+ring = "0.17"
+png = { version = "0.18.1", optional = true }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10"
+sysinfo = { version = "0.40.3", default-features = false, features = ["system"] }
+tokio = { version = "1.54.1", features = ["time", "macros", "sync", "process", "io-util"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+zeroize = "1"
+
+[features]
+# The optional money sections (src/modules.rs). Without one, its page, its signing flows and the
+# actions on its chat cards aren't built; the cards say the section isn't in this build.
+#   cargo build --no-default-features            just chat, cheques and invoices
+#   cargo build --no-default-features --features drops
+default = ["drops", "crowdfund"]
+drops = []
+crowdfund = []
+# ACCORDO_SCREENSHOT=out.png [ACCORDO_OPEN=<room index>] cargo run --features dev-screenshot:
+# saves the window as a PNG a moment after start and quits (for checking the look without a screen).
+dev-screenshot = ["dep:png"]
+
+# Dependencies (iced, cosmic-text, wgpu…) optimized even in dev builds: the UI stays smooth while
+# developing, and only this crate is rebuilt in debug mode on each change. The first dev build
+# after this takes longer (all dependencies are compiled with optimizations once).
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+
+[dev-dependencies]
+# Checks the vault's ring PBKDF2 against the reference implementation.
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+# #[tokio::test] for the live API test (cargo test -- --ignored live).
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

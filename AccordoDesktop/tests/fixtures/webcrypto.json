@@ -1,0 +1,45 @@
+{
+  "room_key": "L7NmBHIpyjRymPza0kZZTwMC0l5OMJyRT/m3kzwqTog=",
+  "key_id": "p1Ayf1cM+qrw",
+  "text": "Привет 👋 hello — E2EE",
+  "ciphertext": "{\"iv\":\"qQyUJDS5dFdSdINv\",\"data\":\"SrPt3dd9drfW8Rsdt8I2U/u5+0IAxj94ZpgK4Q+CrN46Pi1hWilhJnwxcljZUOhY\",\"k\":\"p1Ayf1cM+qrw\"}",
+  "old_keys": [
+    "uBTGAiLDlsvGHjMMEdG4bvMscbYxqfkvHh2BtIHlM+w=",
+    "XAXaKhQPm5wkK+0PxtDQW4Ism/52rHWBuMrwJ7d7jpM="
+  ],
+  "ciphertext_old_key": "{\"iv\":\"SoWSKn2ObFR+v5Qu\",\"data\":\"EmRuqwW5ZeBB70vxtH7dCJebdd+nIMgB6rbMkf2DZbgZ66RIGI8IRA==\",\"k\":\"EJBrCzxw5kbK\"}",
+  "archived_keys": "{\"iv\":\"xHGMhvLaYPLqHeYh\",\"data\":\"v/YLmDMw/FKQgwKxPWIT4T/7EEA68odf2W0GnmjQe/7mtyWX5TLG/IrVaHnXedxvTdpO1HPA4LXNngzWJ2I5kradmhzLyhg0FCnWrT1JWaGxrkDqdjM2TMpmKenISbb/UhZZeLFX1tQft9irNFCT\",\"k\":\"p1Ayf1cM+qrw\"}",
+  "attachment": {
+    "type": "image",
+    "file_name": "cat.png",
+    "size": 42
+  },
+  "attachment_sealed": {
+    "encrypted": true,
+    "iv": "AmAMtbnp4ehJOMtY",
+    "data": "35znJqdnSZblipSvNOLAquqf2HA7uzJwb2ygWTA2myghC+5TBEov2OBRU8iQHK/FxFBRQv+YDo/X0mcqtxXd6g==",
+    "k": "p1Ayf1cM+qrw"
+  },
+  "alice": {
+    "pub": "{\"key_ops\":[],\"ext\":true,\"kty\":\"EC\",\"x\":\"9Yta8twRhRPX6lOxwQ_BQSWlDnRVsW362wYQVn_3bRA\",\"y\":\"14P0vdRdaw0XroJS6Ie_XqfCoOrlPDtTBMQCxVax8hI\",\"crv\":\"P-256\"}",
+    "priv": "{\"key_ops\":[\"deriveKey\",\"deriveBits\"],\"ext\":true,\"kty\":\"EC\",\"x\":\"9Yta8twRhRPX6lOxwQ_BQSWlDnRVsW362wYQVn_3bRA\",\"y\":\"14P0vdRdaw0XroJS6Ie_XqfCoOrlPDtTBMQCxVax8hI\",\"crv\":\"P-256\",\"d\":\"Pez0XD3uYSVGJdSwgO3-3x40UBVsca6I3mFyMmhv7a0\"}"
+  },
+  "bob": {
+    "pub": "{\"key_ops\":[],\"ext\":true,\"kty\":\"EC\",\"x\":\"ZATxEXQ4CoHMROivLd-8ZqzcLHEqCULizNolZIfgTM4\",\"y\":\"kB_R27EJFTYIh-JA4oPDyLPzx-0hnx8uAnqk3Mty-rU\",\"crv\":\"P-256\"}",
+    "priv": "{\"key_ops\":[\"deriveKey\",\"deriveBits\"],\"ext\":true,\"kty\":\"EC\",\"x\":\"ZATxEXQ4CoHMROivLd-8ZqzcLHEqCULizNolZIfgTM4\",\"y\":\"kB_R27EJFTYIh-JA4oPDyLPzx-0hnx8uAnqk3Mty-rU\",\"crv\":\"P-256\",\"d\":\"RswY6hVoB1RjRzI-h7sb0itOD36KPXjwlrfHmA0chyQ\"}"
+  },
+  "envelope_alice_to_bob": "{\"iv\":\"7PVALykSSh/8+Lxx\",\"data\":\"bu3UUhCx2DtgA1QwyJ46Mr1X7mgFjqkyd248rXxUBdweF3zvNaw5GDcb0C7Id4ZpbK/W6R4daVpZu7KT\"}",
+  "alice_fingerprint": "B565 6705 8234 9050 4BE7 7902 A48A EA53 B1B7 3115 5265 24BA D7C0 6BE2 5D6D 7DAB",
+  "vault_password": "correct horse battery",
+  "vault": {
+    "salt": "WTeljUCo0RN8qO4VjPh2ag==",
+    "iv": "y1EY+UsjFerjgGJ0",
+    "cipher": "N8+lUYWVjIABET9Sh+haPGlTsDUYGvdJsXLZjrlfqFnnbxLM+CM=",
+    "iter": 600000
+  },
+  "vault_legacy": {
+    "salt": "I8IN2cmPWfQE450zfInYgw==",
+    "iv": "jrZv93n8e0J9tVk4",
+    "cipher": "r0zogG86jxTGZ7+etMDFnbxUCvPZP4ugEFtb"
+  }
+}

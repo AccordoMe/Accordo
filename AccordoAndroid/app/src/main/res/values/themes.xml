@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window before Compose draws: the desktop's background colour, so the first frame matches. -->
+    <style name="Theme.Accordo" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0A0B10</item>
+        <item name="android:navigationBarColor">#0A0B10</item>
+        <item name="android:statusBarColor">#0D0E14</item>
+        <!-- The palette is dark-only: the system bars must not switch to dark icons. -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+</resources>

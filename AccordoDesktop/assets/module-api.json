@@ -1,0 +1,219 @@
+{
+  "name": "Accordo module API",
+  "protocol": 1,
+  "about": "What a module (mini-app) can ask Accordo for. The same protocol on the web and the desktop: docs/MINIAPP_API_RU.md. Every request after the handshake carries its session. Types: string, integer, number, boolean, string[] (comma-separated in the console), object (JSON).",
+  "errors": {
+    "4001": "The user rejected the request or closed the window",
+    "4100": "No permission, and it can't be asked for (not in the registration, or declined)",
+    "4200": "Not supported (also evm.*, solana.*, wallet.sign, wallet.transact)",
+    "4900": "No handshake yet, or another session",
+    "5000": "The host couldn't do it",
+    "5002": "The token or network isn't supported for this",
+    "5004": "Only when opened from a chat",
+    "5005": "Too many requests waiting on the user (3)",
+    "5006": "No such invoice / recipient",
+    "5007": "The invoice is already paid or cancelled",
+    "-32602": "Invalid params"
+  },
+  "methods": [
+    {
+      "method": "accordo_handshake",
+      "group": "Session",
+      "summary": "First call: the consent screen, then the session and what's granted",
+      "permission": null,
+      "window": true,
+      "params": [
+        { "name": "sdk", "type": "string", "required": false, "description": "The SDK's version, for the host's logs", "example": "console" }
+      ],
+      "returns": { "protocol": 1, "methods": ["ui.ready", "…"], "context": {}, "session": "s_…", "granted": ["profile.nick"] },
+      "errors": []
+    },
+    {
+      "method": "ui.ready",
+      "group": "ui",
+      "summary": "The module loaded: the host hides its splash",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": null,
+      "errors": [4900]
+    },
+    {
+      "method": "ui.close",
+      "group": "ui",
+      "summary": "Close the panel",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": null,
+      "errors": [4900]
+    },
+    {
+      "method": "ui.expand",
+      "group": "ui",
+      "summary": "Full size",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": null,
+      "errors": [4900]
+    },
+    {
+      "method": "ui.setTitle",
+      "group": "ui",
+      "summary": "The panel's title, up to 40 characters",
+      "permission": null,
+      "window": false,
+      "params": [
+        { "name": "text", "type": "string", "required": true, "description": "Up to 40 characters; empty: back to the module's name. The name and domain always show anyway", "example": "My module" }
+      ],
+      "returns": null,
+      "errors": [4900]
+    },
+    {
+      "method": "ui.openLink",
+      "group": "ui",
+      "summary": "Open an https link — after the user confirms",
+      "permission": null,
+      "window": true,
+      "params": [
+        { "name": "url", "type": "string", "required": true, "description": "https: only; opens in the browser, outside Accordo", "example": "https://accordo.me" }
+      ],
+      "returns": true,
+      "errors": [4001, 4900, -32602]
+    },
+    {
+      "method": "ui.copyText",
+      "group": "ui",
+      "summary": "Copy to the clipboard (a toast tells the user)",
+      "permission": null,
+      "window": false,
+      "params": [
+        { "name": "text", "type": "string", "required": true, "description": "Up to 10 000 characters", "example": "Hello from a module" }
+      ],
+      "returns": null,
+      "errors": [4900]
+    },
+    {
+      "method": "context.get",
+      "group": "context",
+      "summary": "Where it was opened: platform, theme, launch",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": { "protocol": 1, "platform": "desktop", "locale": "en", "theme": { "scheme": "dark", "accent": "#6366f1" }, "launch": { "source": "catalog", "startParam": null, "roomRef": null, "roomRole": null }, "launchData": "…" },
+      "errors": [4900]
+    },
+    {
+      "method": "user.getRef",
+      "group": "user",
+      "summary": "The user's pseudo-id for this module — always, no window",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": "u_b7b3302f3956b502b0cea97d",
+      "errors": [4900]
+    },
+    {
+      "method": "user.getProfile",
+      "group": "user",
+      "summary": "Nick, avatar, email — what the user shares",
+      "permission": "profile.nick / profile.avatar / profile.email",
+      "window": true,
+      "params": [],
+      "returns": { "nick": "alice", "avatarUrl": null, "email": null, "emailVerified": null },
+      "errors": [4001, 4100, 4900]
+    },
+    {
+      "method": "user.requestWallet",
+      "group": "user",
+      "summary": "The current wallet address and network (read only)",
+      "permission": "profile.wallet",
+      "window": true,
+      "params": [],
+      "returns": { "address": "0x70…C8", "chain": { "id": "eip155:8453", "name": "Base", "testnet": false } },
+      "errors": [4001, 4100, 4900]
+    },
+    {
+      "method": "history.get",
+      "group": "user",
+      "summary": "The user's invoices and cheques, no addresses",
+      "permission": "history.invoices / history.cheques",
+      "window": true,
+      "params": [
+        { "name": "limit", "type": "integer", "required": false, "description": "1 to 100, newest first", "example": 20 }
+      ],
+      "returns": [{ "kind": "invoice", "role": "issued", "status": "paid", "amount": "5", "token": "USDC", "chain": "Base", "note": "", "counterparty": "bob", "created_at": "…" }],
+      "errors": [4001, 4100, 4200, 4900, -32602]
+    },
+    {
+      "method": "permissions.get",
+      "group": "permissions",
+      "summary": "What's granted",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": { "profile.nick": true, "profile.wallet": false, "wallet": false, "profile": true },
+      "errors": [4900]
+    },
+    {
+      "method": "permissions.request",
+      "group": "permissions",
+      "summary": "Ask for permissions in one window",
+      "permission": null,
+      "window": true,
+      "params": [
+        { "name": "permissions", "type": "string[]", "required": true, "description": "New names (profile.nick…) or old ones (profile, wallet…). The way back from a \"no\"", "example": ["profile.nick", "profile.wallet"] }
+      ],
+      "returns": { "profile.nick": true, "profile.wallet": true },
+      "errors": [4001, 4100, 4200, 4900, 5004, -32602]
+    },
+    {
+      "method": "payments.getTokens",
+      "group": "payments",
+      "summary": "The network's tokens, no balances",
+      "permission": null,
+      "window": false,
+      "params": [],
+      "returns": { "chain": { "id": "eip155:8453", "name": "Base", "testnet": false }, "tokens": [{ "symbol": "USDC", "name": "USD Coin", "address": "0x8335…2913", "decimals": 6, "iconUrl": "…", "chain": {} }] },
+      "errors": [4900]
+    },
+    {
+      "method": "payments.selectTokenModal",
+      "group": "payments",
+      "summary": "Accordo's token picker → one token",
+      "permission": null,
+      "window": true,
+      "params": [],
+      "returns": { "symbol": "USDC", "name": "USD Coin", "address": "0x8335…2913", "decimals": 6, "iconUrl": "…", "chain": {} },
+      "errors": [4001, 4900, 5005]
+    },
+    {
+      "method": "payments.payInvoice",
+      "group": "payments",
+      "summary": "Pay an Accordo invoice in Accordo's own window",
+      "permission": "payments.pay",
+      "window": true,
+      "params": [
+        { "name": "invoiceId", "type": "string", "required": true, "description": "0x + 64 hex (EVM) or a Solana account", "example": "0x…" }
+      ],
+      "returns": { "status": "paid", "invoiceId": "0x…", "invoiceStatus": "paid", "txHash": "0x…" },
+      "errors": [4001, 4100, 4900, 5005, 5006, 5007, -32602]
+    },
+    {
+      "method": "payments.requestCheque",
+      "group": "payments",
+      "summary": "Write a cheque in Accordo's own window",
+      "permission": "payments.pay",
+      "window": true,
+      "params": [
+        { "name": "amount", "type": "string", "required": true, "description": "In token units, as a string: \"5\", \"0.25\"", "example": "1" },
+        { "name": "token", "type": "string", "required": true, "description": "A symbol, a token address, or native", "example": "native" },
+        { "name": "note", "type": "string", "required": false, "description": "Up to 200 characters", "example": "Prize" },
+        { "name": "to", "type": "string", "required": false, "description": "An Accordo nickname like @alice — never an address. Empty: the user picks", "example": "@alice" }
+      ],
+      "returns": { "status": "created", "chequeId": "0x…", "amount": "1", "token": "ETH", "chain": "Base", "txHash": "0x…" },
+      "errors": [4001, 4100, 4900, 5002, 5005, -32602]
+    }
+  ]
+}
