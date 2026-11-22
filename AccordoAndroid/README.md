@@ -27,7 +27,7 @@ gradient is stretched across the visible circle, so a launcher's mask does not c
 ## Building
 
 ```
-mobile/
+AccordoAndroid/
   settings.gradle.kts        modules and repositories
   build.gradle.kts           versions: AGP, Kotlin, Compose
   app/build.gradle.kts       SDK levels, Compose, JNA (uniffi's runtime), serialization
@@ -52,7 +52,7 @@ cd ../AccordoAndroid
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`sdk.dir` in `mobile/local.properties` points at the SDK (not committed). The Java toolchain comes
+`sdk.dir` in `AccordoAndroid/local.properties` points at the SDK (not committed). The Java toolchain comes
 from Gradle (foojay), so a machine with only a JRE still builds — the first run downloads JDK 21.
 
 ## Wiring
