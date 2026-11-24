@@ -140,6 +140,10 @@ pub enum Message {
     Switcher(crate::components::quick_switcher::SwitcherMsg),
     /// Once a second while wallets are unlocked with a timer: lock at the deadline.
     WalletClock,
+    /// The unlock this computer kept for the account (lock timer on), read at sign-in.
+    WalletRestored(String, Option<std::sync::Arc<crate::e2ee::wallet_session::Restored>>),
+    /// Keeping the unlock in the secret store: why it failed (the wallets then lock with the app).
+    WalletKept(Result<(), String>),
     /// Once a second while App settings → About is open: measure what the app uses.
     UsageTick,
     /// The Networks window (the gear next to the network picker).
@@ -276,8 +280,14 @@ pub struct App {
     pub hidden_locked: bool,
     /// Client-side state kept on this computer (store/app_store.rs): UI scale, Developer mode…
     pub store: AppStore,
-    /// Wallet keys unlocked with the master password (memory only).
+    /// Wallet keys unlocked with the master password (in memory; with a lock timer also kept in
+    /// the secret store until it runs out).
     pub wallet_session: crate::e2ee::wallet_session::WalletSession,
+    /// When this run of the app began (ms): a chat key kept "until the app closes" from an
+    /// earlier run is older than this.
+    pub started_ms: i64,
+    /// Accounts whose chat-key reminder was shown in this run ("Not now" lasts until the next start).
+    pub chat_key_reminded: std::collections::HashSet<String>,
     pub wallet_ui: crate::components::wallet_panel::State,
     pub toasts: Toasts,
 }
@@ -340,6 +350,8 @@ impl App {
             hidden_locked: false,
             store,
             wallet_session: Default::default(),
+            started_ms: chrono::Utc::now().timestamp_millis(),
+            chat_key_reminded: Default::default(),
             wallet_ui: Default::default(),
             toasts: Toasts::default(),
         };
@@ -465,8 +477,23 @@ impl App {
             Message::Contacts(m) => return self.contacts_update(m),
             Message::WalletClock => {
                 if self.wallet_session.expired(chrono::Utc::now().timestamp_millis()) {
-                    self.lock_wallets();
-                    return self.toasts.show(Kind::Info, "Wallets locked");
+                    let forget = self.lock_and_forget_wallets();
+                    return Task::batch([forget, self.toasts.show(Kind::Info, "Wallets locked")]);
+                }
+            }
+            Message::WalletRestored(account, restored) => {
+                // Still the same account, not unlocked meanwhile, and the deadline still ahead.
+                let current = self.session.as_ref().is_some_and(|s| s.key() == account);
+                if let Some(r) = restored.filter(|r| current && !self.wallet_session.unlocked() && r.lock_at > chrono::Utc::now().timestamp_millis()) {
+                    self.wallet_session.resume(&r);
+                    self.store.set_wallet_session(true, self.wallet_session.lock_at);
+                    tracing::info!("wallets: unlocked from this computer's secret store until the lock timer runs out");
+                }
+            }
+            Message::WalletKept(result) => {
+                if let Err(e) = result {
+                    tracing::warn!("wallets: couldn't keep the unlock in the secret store: {e}");
+                    return self.toasts.show(Kind::Info, "Couldn't keep the unlock in the system's secret store — the wallets will lock when the app closes");
                 }
             }
             Message::OpenWallet => {
@@ -619,7 +646,7 @@ impl App {
                     }
                     AppSettingsMsg::HideNow => {
                         self.close_app_settings();
-                        self.hide();
+                        return self.hide();
                     }
                     AppSettingsMsg::Close => self.close_app_settings(),
                     AppSettingsMsg::RecordKey(action) => {
@@ -664,6 +691,35 @@ impl App {
                             return self.devtools.window.filter(|_| open).map(window::gain_focus).unwrap_or_else(Task::none);
                         }
                         return Task::done(Message::Dev(DevMsg::Toggle));
+                    }
+                    AppSettingsMsg::ForgetWalletKeys => {
+                        // Every account signed in here, and the open one (its entry may predate the list).
+                        let mut accounts: Vec<String> = self.store.accounts.iter().map(|a| a.key()).collect();
+                        accounts.extend(self.session.as_ref().map(Session::key));
+                        accounts.sort();
+                        accounts.dedup();
+                        self.lock_wallets();
+                        let forget = Task::perform(crate::e2ee::wallet_session::forget(accounts), |()| Message::None);
+                        return Task::batch([forget, self.toasts.show(Kind::Success, "Saved wallet keys deleted from this computer — wallets locked")]);
+                    }
+                    AppSettingsMsg::ForgetChatKey => {
+                        // Only with a backup: the chat password brings it back.
+                        let Some((account, keep)) = self.chat_key_keep() else { return Task::none() };
+                        if !keep.has_backup || !matches!(self.chat_key, ChatKey::Ready(_) | ChatKey::Different(_)) {
+                            return Task::none();
+                        }
+                        tracing::info!("chat key: deleted from this computer (Storage)");
+                        let forget = Task::perform(chat_key::forget(account), |r| Message::Session(SessionMsg::ChatKeyForgotten(r)));
+                        return Task::batch([forget, self.drop_chat_key("Your chat key was deleted from this computer.")]);
+                    }
+                    AppSettingsMsg::ChatKeyLifetime(lifetime) => {
+                        if !self.chat_key_keep().is_some_and(|(_, k)| k.has_backup) {
+                            return Task::none();
+                        }
+                        self.store.chat_key_lifetime = lifetime;
+                        // Days: applied now (a key older than that goes). Until the app closes: at closing.
+                        let check = if matches!(lifetime, crate::e2ee::keystore::Lifetime::Days(_)) { self.check_chat_key_lifetime() } else { Task::none() };
+                        return Task::batch([self.save_store(), check]);
                     }
                     AppSettingsMsg::OpenDataFolder => {
                         if let Some(dir) = crate::api::client::config_dir() {
@@ -801,7 +857,7 @@ impl App {
             };
             layers.push(chain_settings::view(view));
         } else if self.app_settings_open {
-            let view = app_settings_modal::View { tab: self.app_settings_tab, store: &self.store, server: self.session.as_ref().map(|s| s.base.as_str()), usage: &self.usage, modules: self.modules(), developer: self.session.as_ref().map(|s| s.user.is_developer), devtools_open: self.devtools.open, recording: self.hotkey_recording, note: self.hotkey_note.as_ref() };
+            let view = app_settings_modal::View { tab: self.app_settings_tab, store: &self.store, server: self.session.as_ref().map(|s| s.base.as_str()), usage: &self.usage, modules: self.modules(), developer: self.session.as_ref().map(|s| s.user.is_developer), devtools_open: self.devtools.open, recording: self.hotkey_recording, note: self.hotkey_note.as_ref(), wallet_kept_until: self.wallet_session.lock_at.filter(|_| self.wallet_session.unlocked()), chat_key: self.session.as_ref().map(|s| app_settings_modal::ChatKeyInfo { here: matches!(self.chat_key, ChatKey::Ready(_) | ChatKey::Different(_)), has_backup: s.user.has_key_backup }) };
             layers.push(app_settings_modal::view(view));
         }
         if self.admin.open && self.session.as_ref().is_some_and(|s| s.user.is_admin) {
@@ -1032,6 +1088,11 @@ impl App {
             .then(|| iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Chat(chat_page::ChatMsg::TypingTick)));
         let reveal_clock = self.wallet_ui.reveal.as_ref().is_some_and(|r| r.key.is_some()).then(|| iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Wallet(crate::components::wallet_panel::WalletMsg::RevealTick)));
         let wallet_clock = self.wallet_session.lock_at.is_some().then(|| iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::WalletClock));
+        // A chat key kept for some days: looked at every few minutes while it's here.
+        let chat_key_clock = (matches!(self.store.chat_key_lifetime, crate::e2ee::keystore::Lifetime::Days(_))
+            && matches!(self.chat_key, ChatKey::Ready(_))
+            && self.session.as_ref().is_some_and(|s| s.user.has_key_backup))
+        .then(|| iced::time::every(std::time::Duration::from_secs(300)).map(|_| Message::Session(SessionMsg::ChatKeyClock)));
         let usage_clock = (self.app_settings_open && self.app_settings_tab == app_settings_modal::Tab::About)
             .then(|| iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::UsageTick));
         let drops = self.session.is_some().then(|| {
@@ -1040,7 +1101,7 @@ impl App {
                 _ => None,
             })
         });
-        Subscription::batch([Some(keys), closed, avatars, live, dev, anim, typing_clock, drops, wallet_clock, reveal_clock, blur, usage_clock].into_iter().flatten())
+        Subscription::batch([Some(keys), closed, avatars, live, dev, anim, typing_clock, drops, wallet_clock, chat_key_clock, reveal_clock, blur, usage_clock].into_iter().flatten())
     }
 }
 

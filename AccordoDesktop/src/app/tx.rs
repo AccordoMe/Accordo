@@ -119,6 +119,13 @@ impl App {
                         self.wallet_open = true;
                         Err("Your wallets locked meanwhile — unlock them and try again".to_string())
                     }
+                    // Added on another device since the unlock (a new salt): the password isn't
+                    // kept, so the wallets lock and the next unlock takes this one in too.
+                    Err(crate::e2ee::wallet_session::OpenError::NeedsPassword) => {
+                        self.lock_wallets();
+                        self.wallet_open = true;
+                        Err("This wallet was added on another device since you unlocked — unlock again with your master password and try again".to_string())
+                    }
                     Err(e) => Err(e.to_string()),
                 };
                 let wallet = wallet.and_then(|w| {

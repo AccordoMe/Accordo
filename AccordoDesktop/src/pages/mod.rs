@@ -7,6 +7,7 @@ pub mod chat_actions;
 pub mod chat_media;
 pub mod chat_page;
 pub mod chat_polls;
+pub mod chat_search;
 pub mod cheques_page;
 #[cfg(feature = "crowdfund")]
 pub mod crowdfund_page;

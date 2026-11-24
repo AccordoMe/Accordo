@@ -24,4 +24,10 @@ pub enum SessionMsg {
     Saved(Result<(), String>),
     ChatKeyLoaded(Result<Option<DeviceKeypair>, String>),
     ChatKeyInstalled(Result<DeviceKeypair, String>),
+    /// Every few minutes while the chat key has a lifetime in days: has it run out?
+    ChatKeyClock,
+    /// The lifetime was applied to this account's key: Ok(true) — it ran out and was deleted here.
+    ChatKeyExpired(String, Result<bool, String>),
+    /// Storage's "Delete chat key" reached the secret store (or why not).
+    ChatKeyForgotten(Result<(), String>),
 }

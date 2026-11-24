@@ -117,7 +117,8 @@ pub fn is_live(content: &str) -> bool {
     content.contains("<t:") && parse(content).iter().any(|p| matches!(p, Piece::Stamp(_, 'R' | 'C')))
 }
 
-fn spans_of<'a>(text_part: &str, size: f32, color: Color, out: &mut Vec<iced::widget::text::Span<'a, ()>>) {
+/// Text as spans, emoji runs in the colour-emoji font (also the chat search's snippets).
+pub(crate) fn spans_of<'a>(text_part: &str, size: f32, color: Color, out: &mut Vec<iced::widget::text::Span<'a, ()>>) {
     let mut run = String::new();
     let mut emoji = false;
     let flush = |run: &mut String, emoji: bool, out: &mut Vec<iced::widget::text::Span<'a, ()>>| {

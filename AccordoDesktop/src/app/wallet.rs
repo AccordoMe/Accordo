@@ -271,7 +271,14 @@ impl App {
                 self.wallet_session.start(&done, minutes, chrono::Utc::now().timestamp_millis());
                 self.store.set_wallet_session(true, self.wallet_session.lock_at);
                 let note = if first { "Master password set" } else if dev { "Wallets unlocked with the test password from state.json" } else { "Wallets unlocked" };
-                let mut tasks = vec![self.save_store(), self.toasts.show(Kind::Success, note)];
+                // With a timer the keys stay in the secret store until it runs out; "until restart"
+                // removes what an earlier timed unlock kept.
+                let account = session.key();
+                let kept = match self.wallet_session.persisted() {
+                    Some(json) => Task::perform(crate::e2ee::wallet_session::keep(account, json), Message::WalletKept),
+                    None => Task::perform(crate::e2ee::wallet_session::forget(vec![account]), |()| Message::None),
+                };
+                let mut tasks = vec![self.save_store(), self.toasts.show(Kind::Success, note), kept];
                 if let Some(list) = done.upgraded.clone() {
                     self.store.wallets = list;
                     if !session.token.is_empty() {
@@ -281,8 +288,8 @@ impl App {
                 return Task::batch(tasks);
             }
             SettingsMsg::VaultLockNow => {
-                self.lock_wallets();
-                return self.toasts.show(Kind::Info, "Wallets locked");
+                let forget = self.lock_and_forget_wallets();
+                return Task::batch([forget, self.toasts.show(Kind::Info, "Wallets locked")]);
             }
             SettingsMsg::VaultCopy => {
                 let value = form.value.clone();
@@ -312,8 +319,9 @@ impl App {
                 self.store.wallets.clear();
                 self.store.set_active_wallet(None, None);
                 self.store.encrypted_vault = None;
-                self.lock_wallets();
+                let forget = self.lock_and_forget_wallets();
                 return Task::batch([
+                    forget,
                     self.save_store(),
                     self.toasts.show(Kind::Success, if had { "Wallets removed — choose a new master password" } else { "Master password reset — choose a new one" }),
                 ]);
@@ -362,9 +370,20 @@ impl App {
         Task::none()
     }
 
-    /// Locks the wallets (keys wiped from memory).
+    /// Locks the wallets (keys wiped from memory). What the secret store kept for the account
+    /// stays: leaving or switching accounts isn't locking, and it resumes on coming back.
     pub(super) fn lock_wallets(&mut self) {
         self.wallet_session.lock();
         self.store.set_wallet_session(false, None);
+    }
+
+    /// The user's own lock (Lock now, the deadline, hiding the window, a reset): out of memory and
+    /// out of the secret store, so the next start asks for the master password.
+    pub(super) fn lock_and_forget_wallets(&mut self) -> Task<Message> {
+        self.lock_wallets();
+        match &self.session {
+            Some(s) => Task::perform(crate::e2ee::wallet_session::forget(vec![s.key()]), |()| Message::None),
+            None => Task::none(),
+        }
     }
 }

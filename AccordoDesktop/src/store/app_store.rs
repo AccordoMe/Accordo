@@ -307,6 +307,9 @@ pub struct AppStore {
     pub hide_on_blur: bool,
     /// Covering the window also locks the wallets.
     pub lock_wallets_on_hide: bool,
+    /// How long a chat key stays on this computer (App settings → Storage); only for accounts
+    /// with a backup on Accordo.
+    pub chat_key_lifetime: crate::e2ee::keystore::Lifetime,
     /// Keyboard shortcuts on.
     pub shortcuts: bool,
     /// Keys the user gave the shortcuts (hotkeys.rs): action id → "Ctrl+Shift+K", "" = none.
@@ -369,6 +372,7 @@ impl Default for AppStore {
             blur_previews: false,
             hide_on_blur: false,
             lock_wallets_on_hide: false,
+            chat_key_lifetime: Default::default(),
             shortcuts: true,
             hotkeys: Default::default(),
             hidden_modules: Vec::new(),

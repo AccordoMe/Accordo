@@ -30,6 +30,11 @@ impl App {
             }
             WindowMsg::Closed(id) => {
                 if Some(id) == self.main_window {
+                    // A chat key kept "until the app closes" goes now (after a crash: at the next start).
+                    if let Some((account, _)) = self.chat_key_keep().filter(|(_, k)| k.has_backup && k.lifetime == crate::e2ee::keystore::Lifetime::ThisRun) {
+                        let _ = crate::e2ee::keystore::delete(&account);
+                        tracing::info!("chat key: deleted from this computer as the app closes");
+                    }
                     return iced::exit();
                 }
                 if self.devtools.window == Some(id) {
@@ -44,7 +49,7 @@ impl App {
             WindowMsg::Blurred(id) => {
                 // Going to the developer tools isn't stepping away.
                 if self.store.hide_on_blur && Some(id) == self.main_window && self.devtools.window.is_none() {
-                    self.hide();
+                    return self.hide();
                 }
             }
             WindowMsg::Unhide => {

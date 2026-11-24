@@ -15,7 +15,7 @@ use crate::components::ui::{icon, El};
 use crate::icons;
 use crate::theme::*;
 
-pub fn view(room: &ChatRoomItem, me: i64, requests: i64, members_open: bool) -> El<'_> {
+pub fn view(room: &ChatRoomItem, me: i64, requests: i64, members_open: bool, search_open: bool) -> El<'_> {
     let subtitle: El = match display::kind(room) {
         RoomKind::Dm => match display::partner(room, me) {
             Some(p) => {
@@ -38,9 +38,13 @@ pub fn view(room: &ChatRoomItem, me: i64, requests: i64, members_open: bool) -> 
     if display::is_encrypted_room(room) {
         name = name.push(icon(icons::lock(), 11, GREEN));
     }
-    let action = |handle: svg::Handle, what: &'static str| -> El<'_> {
-        button(center(icon(handle, 17, MUTED))).width(34).height(34).padding(0).style(ghost(8.0, rgba(0xffffff, 0.06))).on_press(Message::NotYet(what)).into()
-    };
+    // Search this chat (lit while its panel is open).
+    let search = button(center(icon(icons::search(), 17, if search_open { Color::WHITE } else { MUTED })))
+        .width(34)
+        .height(34)
+        .padding(0)
+        .style(move |t, s| if search_open { selectable(true, rgba(0x6366f1, 0.25), 8.0)(t, s) } else { ghost(8.0, rgba(0xffffff, 0.06))(t, s) })
+        .on_press(Message::Chat(ChatMsg::Search(crate::pages::chat_search::SearchMsg::Toggle)));
     // The member list (not for DMs: two people).
     let members_button = |room: &ChatRoomItem, open: bool| -> El<'_> {
         if super::display::is_dm(room) {
@@ -77,10 +81,8 @@ pub fn view(room: &ChatRoomItem, me: i64, requests: i64, members_open: bool) -> 
         row![
             who,
             space().width(Fill),
-            action(icons::phone(), "Calls"),
-            action(icons::video(), "Video calls"),
             button(center(icon(icons::pin(), 17, MUTED))).width(34).height(34).padding(0).style(ghost(8.0, rgba(0xffffff, 0.06))).on_press(Message::Chat(ChatMsg::OpenPinned)),
-            action(icons::search(), "Search in the chat"),
+            search,
             members_button(room, members_open),
             manage(icons::settings(), Tab::General, room.is_member != Some(false), requests),
         ]

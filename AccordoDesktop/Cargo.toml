@@ -68,6 +68,9 @@ lto = true
 opt-level = 3
 strip = true
 
+# Release builds on Linux: no other program can attach to the app or read its memory (main.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # Checks the vault's ring PBKDF2 against the reference implementation.

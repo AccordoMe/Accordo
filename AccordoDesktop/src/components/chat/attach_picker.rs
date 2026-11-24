@@ -88,6 +88,20 @@ impl FinanceKind {
     }
 }
 
+/// Whether a card message's text is only the line `default_text` (or the web's handleSend) put
+/// there for an empty box: the feed hides it under the card, which says the same. The chat list,
+/// notifications and search still have it. Text the sender wrote themselves stays.
+pub fn is_default_text(message_type: &str, content: &str) -> bool {
+    let c = content.trim();
+    match message_type {
+        "cheque" => c.starts_with("🎁 Attached Cheque for "),
+        "invoice" => c.starts_with("🧾 Attached Invoice for "),
+        "campaign" => c.starts_with("🔥 Shared a campaign"),
+        "drop" => c.starts_with("🎁 Drop") && c.ends_with("— check if your wallet is in it"),
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum AttachMsg {
     Open(AttachTab),
@@ -387,4 +401,25 @@ pub fn view<'a>(st: &'a State, lists: &'a Lists, now: i64, modules: crate::modul
     .width(Fill);
     let window = container(row![side, main]).width(Length::Fixed(1000.0)).height(Length::Fixed(640.0)).style(modal);
     overlay::modal(window, msg(AttachMsg::Close))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_line_a_card_is_sent_with_is_hidden_and_the_senders_own_text_is_not() {
+        let v = serde_json::json!({"title": "test part", "amount": "950", "token": "USDT"});
+        for kind in [FinanceKind::Cheque, FinanceKind::Invoice, FinanceKind::Campaign, FinanceKind::Drop] {
+            assert!(is_default_text(kind.message_type(), &kind.default_text(&v)), "{kind:?}");
+            assert!(is_default_text(kind.message_type(), &kind.default_text(&serde_json::json!({}))), "{kind:?} without a title");
+        }
+        // As the web words it, too.
+        assert!(is_default_text("cheque", "🎁 Attached Cheque for 950 USDT"));
+        assert!(is_default_text("drop", "🎁 Drop: \"test part\" — check if your wallet is in it"));
+        // Written by the sender, or the same words on a message of another type: shown.
+        assert!(!is_default_text("cheque", "for the pizza 🍕"));
+        assert!(!is_default_text("drop", "🎁 Drop for early testers, enjoy"));
+        assert!(!is_default_text("text", "🎁 Attached Cheque for 950 USDT"));
+    }
 }

@@ -13,6 +13,53 @@ use crate::app::{DataMsg};
 use super::*;
 impl App {
 
+    /// The web's ChatPasswordReminder, once per account in a run, when its chat key is known:
+    /// - a backup on Accordo, but the account's key isn't here (none, or another key) → restore it —
+    ///   setting a new password here would start a new key and lose the old chats;
+    /// - no backup, and the account's own key is here → set a chat password, which makes one. A key
+    ///   that isn't the account's is never offered for backup (Settings loads the key file instead).
+    pub(super) fn remind_chat_key(&mut self) {
+        let Some(s) = self.session.as_ref() else { return };
+        let u = &s.user;
+        if self.key_backup.is_some() || u.session_via_api_key || u.email_verification_required || self.chat_key_reminded.contains(&s.key()) {
+            return;
+        }
+        let mode = match (&self.chat_key, u.has_key_backup) {
+            (ChatKey::Missing | ChatKey::Different(_), true) => KeyMode::Restore,
+            (ChatKey::Ready(_), false) => KeyMode::Create,
+            _ => return,
+        };
+        tracing::info!("chat key: reminder ({mode:?})");
+        self.chat_key_reminded.insert(s.key());
+        self.key_backup = Some(crate::components::key_backup_modal::State::reminder(mode));
+    }
+
+    /// The chat key's lifetime as it applies to the open account (None: signed out).
+    pub(super) fn chat_key_keep(&self) -> Option<(String, chat_key::Keep)> {
+        let s = self.session.as_ref()?;
+        Some((s.key(), chat_key::Keep { lifetime: self.store.chat_key_lifetime, started_ms: self.started_ms, has_backup: s.user.has_key_backup }))
+    }
+
+    /// Applies the lifetime to the open account's key now (a changed setting, the clock).
+    pub(super) fn check_chat_key_lifetime(&self) -> Task<Message> {
+        match self.chat_key_keep() {
+            Some((account, keep)) if keep.has_backup && matches!(self.chat_key, ChatKey::Ready(_)) => {
+                let a = account.clone();
+                Task::perform(chat_key::expire(account, keep), move |r| Message::Session(SessionMsg::ChatKeyExpired(a.clone(), r)))
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// Deletes the open account's chat key from this computer (it has a backup: the chat password
+    /// brings it back) — Storage's button, or its lifetime running out. The chat closes its
+    /// encrypted rooms.
+    pub(super) fn drop_chat_key(&mut self, why: &str) -> Task<Message> {
+        self.chat_key = ChatKey::Missing;
+        let reopen = self.chat_key_changed();
+        Task::batch([reopen, self.toasts.show(Kind::Info, format!("{why} Restore it with your chat password (Settings → Chat encryption)."))])
+    }
+
     /// The chat reopens its encrypted rooms with the chat key now on this computer.
     pub(super) fn chat_key_changed(&mut self) -> Task<Message> {
         let Some(session) = &self.session else { return Task::none() };
@@ -76,8 +123,11 @@ impl App {
         }
         self.login.back_to = None;
         self.reset_module_console(Some(session.user.id));
-        // This account's local data (check vault…) and its wallets; another account's keys go.
+        // This account's local data (check vault…) and its wallets; another account's keys go —
+        // and this one's come back if a lock timer was still running when it was last open.
         self.lock_wallets();
+        let account = session.key();
+        let resume = Task::perform(crate::e2ee::wallet_session::restore(account.clone()), move |r| Message::WalletRestored(account.clone(), r));
         let wallets = account_wallets(&session.user);
         self.store.set_account_owner(&session.key(), session.user.id, !wallets.is_empty());
         let fixed = self.store.set_wallets(wallets);
@@ -91,7 +141,8 @@ impl App {
         let chains = Task::perform(data::chains(api.clone()), |v| Message::Data(DataMsg::ChainsLoaded(v)));
         let chat = chat_page::load(&mut self.chat, &api);
         self.chat_key = ChatKey::Loading;
-        let key = Task::perform(chat_key::load(session.key(), session.previous_key(), session.user.id, session.user.e2ee_public_key.clone()), |v| Message::Session(SessionMsg::ChatKeyLoaded(v)));
+        let keep = chat_key::Keep { lifetime: self.store.chat_key_lifetime, started_ms: self.started_ms, has_backup: session.user.has_key_backup };
+        let key = Task::perform(chat_key::load(session.key(), session.previous_key(), session.user.id, session.user.e2ee_public_key.clone(), keep), |v| Message::Session(SessionMsg::ChatKeyLoaded(v)));
         // Anything live on-chain that Accordo couldn't take last time: try again quietly.
         self.unsaved = crate::store::unsaved::kinds(&session.user.username, &session.base);
         let unsaved = if !session.token.is_empty() && !self.unsaved.is_empty() {
@@ -104,20 +155,21 @@ impl App {
         let orgs = self.load_orgs();
         // Testing: the wallets open with state.json's test password, if it's there (debug builds).
         let dev = self.dev_unlock().unwrap_or_else(Task::none);
-        Task::batch([persist, chains, chat, key, fixed, saved, unsaved, orgs, dev])
+        Task::batch([persist, chains, chat, key, fixed, saved, unsaved, orgs, dev, resume])
     }
 
-    /// Covers the window (and locks the wallets, if that's on).
-    pub(super) fn hide(&mut self) {
+    /// Covers the window (and locks the wallets, if that's on — kept keys included).
+    pub(super) fn hide(&mut self) -> Task<Message> {
         if self.session.is_none() || self.hidden {
-            return;
+            return Task::none();
         }
         self.hidden = true;
         self.switcher = None;
         self.hidden_locked = self.store.lock_wallets_on_hide && self.wallet_session.unlocked();
         if self.hidden_locked {
-            self.lock_wallets();
+            return self.lock_and_forget_wallets();
         }
+        Task::none()
     }
 
     /// Out of the open account, keeping it signed in on this computer: everything of it in memory
@@ -187,7 +239,8 @@ impl App {
                     self.store.forget_account(k);
                 }
                 let saved = self.save_store();
-                let forget = Task::perform(session_store::clear(key.clone()), |_| Message::None);
+                let unlock = Task::perform(crate::e2ee::wallet_session::forget(key.iter().cloned().collect()), |()| Message::None);
+                let forget = Task::batch([Task::perform(session_store::clear(key.clone()), |_| Message::None), unlock]);
                 // Another account signed in here: open it — and say so, so it isn't taken for a switch.
                 if let Some(next) = key.as_deref().and_then(|k| self.store.next_account(k)) {
                     let opened = self.store.account(&next).map(|a| format!("@{} on {}", a.username, a.server())).unwrap_or_default();
@@ -250,7 +303,8 @@ impl App {
                 if self.login.back_to.as_deref() == Some(key.as_str()) {
                     self.login.back_to = None;
                 }
-                return Task::batch([self.save_store(), Task::perform(session_store::clear(Some(key)), |_| Message::None)]);
+                let unlock = Task::perform(crate::e2ee::wallet_session::forget(vec![key.clone()]), |()| Message::None);
+                return Task::batch([self.save_store(), Task::perform(session_store::clear(Some(key)), |_| Message::None), unlock]);
             }
             SessionMsg::Restored(result) => {
                 self.restoring = false;
@@ -292,6 +346,7 @@ impl App {
                     ChatKey::NoStore(e) => tracing::warn!("chat key: secret store unavailable: {e}"),
                     ChatKey::Loading => {}
                 }
+                self.remind_chat_key();
                 return self.chat_key_changed();
             }
             SessionMsg::ChatKeyInstalled(Ok(keypair)) => {
@@ -301,6 +356,20 @@ impl App {
                 tracing::info!("chat key installed on this computer");
                 let reopen = self.chat_key_changed();
                 return Task::batch([reopen, self.toasts.show(Kind::Success, "Chat key restored — your encrypted chats open here now")]);
+            }
+            SessionMsg::ChatKeyClock => return self.check_chat_key_lifetime(),
+            SessionMsg::ChatKeyExpired(account, result) => match result {
+                Ok(true) if self.session.as_ref().is_some_and(|s| s.key() == account) => {
+                    tracing::info!("chat key: lifetime ran out, deleted from this computer");
+                    return self.drop_chat_key("Your chat key's time on this computer ran out — it was deleted here.");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("chat key: couldn't check its lifetime: {e}"),
+            },
+            SessionMsg::ChatKeyForgotten(Ok(())) => {}
+            SessionMsg::ChatKeyForgotten(Err(e)) => {
+                tracing::warn!("chat key: couldn't delete it from the secret store: {e}");
+                return self.toasts.show(Kind::Error, format!("Couldn't delete the chat key from the system's secret store ({e}) — it may still be on this computer."));
             }
             SessionMsg::ChatKeyInstalled(Err(e)) => {
                 tracing::warn!("chat key: {e}");

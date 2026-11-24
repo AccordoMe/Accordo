@@ -9,6 +9,7 @@ use iced::{Alignment, Color, Fill, Font, Length, Padding};
 use super::overlay;
 use super::ui::{icon, El};
 use crate::app::Message;
+use crate::e2ee::keystore::Lifetime;
 use crate::hotkeys;
 use crate::icons;
 use crate::store::app_store::AppStore;
@@ -19,6 +20,19 @@ pub const SCALES: [f32; 6] = [0.9, 1.0, 1.1, 1.25, 1.5, 1.75];
 
 /// Pages the app can open on (id, label).
 pub const START_PAGES: [(&str, &str); 6] = [("chat", "Chat"), ("cheques", "Cheques"), ("invoices", "Invoices"), ("drops", "Drops"), ("crowdfund", "Crowdfund"), ("settings", "Settings")];
+
+/// Storage → Chat key: how long it stays on this computer.
+pub const CHAT_KEY_LIFETIMES: [(&str, Lifetime); 5] =
+    [("Always", Lifetime::Forever), ("Until the app closes", Lifetime::ThisRun), ("1 day", Lifetime::Days(1)), ("7 days", Lifetime::Days(7)), ("30 days", Lifetime::Days(30))];
+
+/// Storage: the open account's chat key on this computer.
+#[derive(Debug, Clone, Copy)]
+pub struct ChatKeyInfo {
+    /// A key is here now.
+    pub here: bool,
+    /// The account has a backup on Accordo (the chat password brings a deleted key back).
+    pub has_backup: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -59,6 +73,12 @@ pub enum AppSettingsMsg {
     /// The developer tools open (true) or closed — remembered for the next start.
     Devtools(bool),
     OpenDataFolder,
+    /// Storage: remove every account's kept wallet unlock from the secret store, and lock now.
+    ForgetWalletKeys,
+    /// Storage: delete the open account's chat key from this computer (only with a backup).
+    ForgetChatKey,
+    /// Storage: how long a chat key stays on this computer.
+    ChatKeyLifetime(Lifetime),
     /// Shortcuts: wait for this action's new keys (again: stop waiting).
     RecordKey(hotkeys::Action),
     ClearKey(hotkeys::Action),
@@ -80,6 +100,10 @@ pub struct View<'a> {
     /// Shortcuts: the action waiting for its new keys, and the word under a row.
     pub recording: Option<hotkeys::Action>,
     pub note: Option<&'a (hotkeys::Action, String)>,
+    /// Storage: the open account's wallets are unlocked with a timer — kept until then (ms).
+    pub wallet_kept_until: Option<i64>,
+    /// Storage: the open account's chat key (None: signed out).
+    pub chat_key: Option<ChatKeyInfo>,
 }
 
 fn msg(m: AppSettingsMsg) -> Message {
@@ -428,8 +452,12 @@ fn developer<'a>(v: &View<'a>) -> El<'a> {
     col.into()
 }
 
-fn storage<'a>() -> El<'a> {
+fn storage<'a>(v: &View<'a>) -> El<'a> {
     let data_dir = crate::api::client::config_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "—".into());
+    let kept = match v.wallet_kept_until.and_then(chrono::DateTime::from_timestamp_millis) {
+        Some(t) => format!("Your unlocked wallet keys are kept in the system's secret store until {} — a restart before then doesn't lock them.", t.with_timezone(&chrono::Local).format("%H:%M")),
+        None => "With a lock timer, unlocked wallet keys are kept in the system's secret store until it runs out. “Until restart” keeps them in memory only.".into(),
+    };
     column![
         setting(
             "App data",
@@ -437,9 +465,56 @@ fn storage<'a>() -> El<'a> {
             button(text("Open folder").size(12)).padding([5, 10]).style(tone_button(Tone::Dark)).on_press(msg(AppSettingsMsg::OpenDataFolder)).into(),
         ),
         text(data_dir).size(11.5).font(Font::MONOSPACE).color(TEXT_SECONDARY),
-        text("The sign-in and the chat key are kept in the system's secret store, not in this folder. Unlocked wallet keys are never written anywhere.").size(11.5).color(FAINT).line_height(1.45),
+        setting(
+            "Wallet keys",
+            "Deletes the kept wallet unlock of every account on this computer and locks the wallets now. The next start asks for the master password.",
+            button(text("Delete saved keys").size(12)).padding([5, 10]).style(tone_button(Tone::Danger)).on_press(msg(AppSettingsMsg::ForgetWalletKeys)).into(),
+        ),
+        text(kept).size(11.5).color(TEXT_SECONDARY).line_height(1.45),
+        chat_key(v),
+        text("The sign-in and the chat key are kept in the system's secret store too, not in this folder. The master password is never written anywhere.").size(11.5).color(FAINT).line_height(1.45),
     ]
     .spacing(10)
+    .into()
+}
+
+/// Storage → Chat key: delete it here, and how long it stays. Both only with a backup on Accordo:
+/// without one a deleted key can't come back, and the encrypted chats would be lost.
+fn chat_key<'a>(v: &View<'a>) -> El<'a> {
+    let Some(info) = v.chat_key else {
+        return setting("Chat key", "Sign in to manage this computer's copy of your chat key.", space().into());
+    };
+    let lifetime = v.store.chat_key_lifetime;
+    let delete = button(text("Delete chat key").size(12))
+        .padding([5, 10])
+        .style(tone_button(Tone::Danger))
+        .on_press_maybe((info.has_backup && info.here).then(|| msg(AppSettingsMsg::ForgetChatKey)));
+    let mut chips: Row<'_, Message> = row![].spacing(6);
+    for (caption, l) in CHAT_KEY_LIFETIMES {
+        chips = chips.push(button(text(caption).size(11)).padding([3, 8]).style(chip(lifetime == l)).on_press_maybe(info.has_backup.then(|| msg(AppSettingsMsg::ChatKeyLifetime(l)))));
+    }
+    let note = if !info.has_backup {
+        "Your chat key has no backup on Accordo yet — set a chat password first (Settings → Chat encryption). Without it a deleted key can't come back and your encrypted chats would be lost, so until then this account's key stays here whatever is picked above."
+    } else if !info.here {
+        "Your chat key isn't on this computer now — restore it with your chat password (Settings → Chat encryption)."
+    } else {
+        match lifetime {
+            Lifetime::Forever => "Kept here until you delete it.",
+            Lifetime::ThisRun => "Deleted when the app closes — you enter your chat password at every start.",
+            Lifetime::Days(_) => "Deleted that long after it came to this computer; then you restore it with your chat password.",
+        }
+    };
+    column![
+        setting(
+            "Chat key",
+            "Deletes your chat key from this computer. The encrypted chats stay on Accordo and open again once you restore the key with your chat password.",
+            delete.into(),
+        ),
+        text("Keep on this computer").size(12).font(SEMIBOLD).color(TEXT_BODY),
+        chips,
+        text(note).size(11.5).color(TEXT_SECONDARY).line_height(1.45),
+    ]
+    .spacing(8)
     .into()
 }
 
@@ -595,7 +670,7 @@ pub fn view<'a>(v: View<'a>) -> El<'a> {
         Tab::Shortcuts => shortcuts(&v),
         Tab::Modules => modules(&v),
         Tab::Developer => developer(&v),
-        Tab::Storage => storage(),
+        Tab::Storage => storage(&v),
         Tab::About => about(&v),
     };
     let main = column![

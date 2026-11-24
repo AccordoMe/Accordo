@@ -72,7 +72,7 @@ impl WalletUnlock {
         self.session.lock().map(|s| s.unlocked()).unwrap_or(false)
     }
 
-    /// Forgets the keys and the password (both wiped from memory).
+    /// Forgets the keys (wiped from memory; the password is never kept).
     pub fn lock(&self) {
         if let Ok(mut session) = self.session.lock() {
             session.lock();
@@ -94,7 +94,7 @@ impl WalletUnlock {
     /// (`{"id","name","address","vault":…}`). Prefer signing in Rust when the call lands there.
     pub fn reveal(&self, wallet_json: String) -> Result<String, MobileError> {
         let wallet: SecureWallet = serde_json::from_str(&wallet_json)?;
-        let mut session = self.session.lock().map_err(|_| MobileError::Wallet { detail: "the wallet session is poisoned".into() })?;
+        let session = self.session.lock().map_err(|_| MobileError::Wallet { detail: "the wallet session is poisoned".into() })?;
         let key = session.open(&wallet.vault).map_err(|e| MobileError::Wallet { detail: e.to_string() })?;
         Ok(key.to_string())
     }
@@ -102,7 +102,7 @@ impl WalletUnlock {
     /// The private key from a bare vault (wallet JSON's `vault` field, sealed or as text).
     pub fn reveal_vault(&self, vault_json: String) -> Result<String, MobileError> {
         let vault: WalletVault = serde_json::from_str(&vault_json)?;
-        let mut session = self.session.lock().map_err(|_| MobileError::Wallet { detail: "the wallet session is poisoned".into() })?;
+        let session = self.session.lock().map_err(|_| MobileError::Wallet { detail: "the wallet session is poisoned".into() })?;
         let key = session.open(&vault).map_err(|e| MobileError::Wallet { detail: e.to_string() })?;
         Ok(key.to_string())
     }
@@ -161,13 +161,15 @@ mod tests {
     #[tokio::test]
     async fn a_wallet_key_opens_with_the_master_password_and_not_with_another() {
         let check = super::new_check_vault("correct horse".into()).await.unwrap();
-        let opened = super::open_wallet_session("correct horse".into(), Some(check.clone()), format!("[{}]", wallet("0xsecret", "correct horse")), 0)
-            .await
-            .expect("unlock");
+        let main = wallet("0xsecret", "correct horse");
+        let opened = super::open_wallet_session("correct horse".into(), Some(check.clone()), format!("[{main}]"), 0).await.expect("unlock");
         assert!(opened.session.unlocked());
-        assert_eq!(opened.session.reveal(wallet("0xsecret", "correct horse")).unwrap(), "0xsecret");
+        assert_eq!(opened.session.reveal(main.clone()).unwrap(), "0xsecret");
 
-        let wrong = super::open_wallet_session("wrong".into(), Some(check), format!("[{}]", wallet("0xsecret", "correct horse")), 0).await;
+        // Sealed since on another device (a new salt): the password isn't kept, so it's asked again.
+        assert!(opened.session.reveal(wallet("0xsecret", "correct horse")).is_err());
+
+        let wrong = super::open_wallet_session("wrong".into(), Some(check), format!("[{main}]"), 0).await;
         assert!(wrong.is_err(), "a wrong password must not open the session");
     }
 

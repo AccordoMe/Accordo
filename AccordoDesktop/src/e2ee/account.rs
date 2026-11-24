@@ -56,14 +56,39 @@ pub async fn create_backup(api: Api, keypair: DeviceKeypair, passphrase: String)
     Ok(())
 }
 
+/// When to apply the chat key's lifetime (App settings → Storage): only with a backup on Accordo,
+/// which brings a deleted key back — without one, deleting it would lose the encrypted chats.
+#[derive(Debug, Clone, Copy)]
+pub struct Keep {
+    pub lifetime: keystore::Lifetime,
+    pub started_ms: i64,
+    pub has_backup: bool,
+}
+
 /// Loads this computer's key for the account (`account`: id@server; `server_key`: its public key
-/// on the server, to tell an old shared entry apart).
-pub async fn load(account: String, previous: String, user_id: i64, server_key: Option<String>) -> Result<Option<DeviceKeypair>, String> {
-    blocking(move || keystore::load(&account, &previous, user_id, server_key.as_deref())).await
+/// on the server, to tell an old shared entry apart). A key whose lifetime ran out is deleted
+/// first, and the account then has none here.
+pub async fn load(account: String, previous: String, user_id: i64, server_key: Option<String>, keep: Keep) -> Result<Option<DeviceKeypair>, String> {
+    blocking(move || {
+        if keep.has_backup {
+            if let Err(e) = keystore::expire(&account, keep.lifetime, chrono::Utc::now().timestamp_millis(), keep.started_ms) {
+                tracing::warn!("chat key: couldn't check its lifetime: {e}");
+            }
+        }
+        keystore::load(&account, &previous, user_id, server_key.as_deref())
+    })
+    .await
+}
+
+/// Applies the lifetime while the app runs; Ok(true): it ran out and the key was deleted here.
+pub async fn expire(account: String, keep: Keep) -> Result<bool, String> {
+    if !keep.has_backup {
+        return Ok(false);
+    }
+    blocking(move || keystore::expire(&account, keep.lifetime, chrono::Utc::now().timestamp_millis(), keep.started_ms)).await
 }
 
 /// Forgets the key on this computer.
-#[allow(dead_code)]
 pub async fn forget(account: String) -> Result<(), String> {
     blocking(move || keystore::delete(&account)).await
 }

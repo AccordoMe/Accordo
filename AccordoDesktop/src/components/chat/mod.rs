@@ -26,6 +26,7 @@ pub mod pinned_modal;
 pub mod poll_card;
 pub mod recorder_ui;
 pub mod room_avatar;
+pub mod search_panel;
 pub mod thread_panel;
 pub mod timestamp;
 pub mod user_profile;

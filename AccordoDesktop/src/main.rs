@@ -3,6 +3,9 @@
 //! Talks to the real API: sign-in (remembered in the OS credential store), the chat (live over
 //! the socket), settings.
 
+// Windows: a window app, no console beside it (release builds; a debug build keeps it for the logs).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 // The API client and the E2EE primitives live in the shared core (`../accordo-core`), so the same
 // code drives the desktop client and the Android app. Re-exported under the old name: every
 // `crate::api::…` path in this crate keeps working.
@@ -74,6 +77,15 @@ pub fn window_base() -> window::Settings {
 use app::App;
 
 pub fn main() -> iced::Result {
+    // Release builds on Linux, before any secret is in memory: no other program of this user can
+    // attach to the app or read its memory (the unlocked wallet keys, the chat key), whatever
+    // ptrace_scope says, and a crash leaves no core dump — as ssh-agent and gpg-agent do. Debug
+    // builds stay debuggable.
+    #[cfg(all(target_os = "linux", not(debug_assertions)))]
+    // SAFETY: prctl with PR_SET_DUMPABLE only changes this process's flag.
+    unsafe {
+        libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+    }
     devtools::log_layer::init();
     // The core reports its requests and socket frames into this panel (logcat on a phone).
     devtools::install();

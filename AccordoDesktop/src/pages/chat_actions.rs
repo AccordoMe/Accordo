@@ -163,6 +163,7 @@ pub fn copy(state: &mut State, id: i64, what_id: bool) -> Task<Message> {
 
 pub fn open_thread(state: &mut State, api: &Api, root_id: i64) -> Task<Message> {
     state.menu = None;
+    state.search = None; // one side panel at a time
     let Some(room_key) = state.selected.clone() else { return Task::none() };
     let root = find(state, root_id).cloned();
     state.thread = Some(Thread::new(root_id, room_key, root));

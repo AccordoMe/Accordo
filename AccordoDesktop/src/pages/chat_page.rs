@@ -23,6 +23,7 @@ use crate::components::chat::new_chat_modal::{self, Kind, NewChatMsg};
 use super::chat_actions::{self, ActionResult};
 use super::room_admin::{self, AdminResult};
 use crate::components::chat::message_list::{Feed, MenuKind, Rights};
+use crate::components::chat::search_panel;
 use crate::components::chat::thread_panel::{self, Thread};
 use crate::components::chat::members_sidebar::{self, Paged};
 use crate::components::chat::pinned_modal;
@@ -117,6 +118,8 @@ pub enum ChatMsg {
     OpenPinned,
     ClosePinned,
     JumpTo(i64),
+    /// Searching this chat on this computer (chat_search).
+    Search(super::chat_search::SearchMsg),
     Unflash(i64),
     // someone's card (UserProfileModal.tsx)
     OpenProfile(Box<UserInfo>),
@@ -276,6 +279,9 @@ pub struct State {
     /// Big rooms: members from the server, page by page.
     pub members_paged: Option<Paged>,
     pub pinned_open: bool,
+    /// The search panel, open for one chat, and what's been read for searching (memory only).
+    pub search: Option<super::chat_search::Search>,
+    pub search_index: super::chat_search::Indexes,
     /// A message just jumped to (highlighted for a moment).
     pub flash: Option<i64>,
     pub profile: Option<user_profile::State>,
@@ -372,6 +378,8 @@ impl State {
             member_menu: None,
             members_paged: None,
             pinned_open: false,
+            search: None,
+            search_index: Default::default(),
             flash: None,
             profile: None,
             media: crate::media::Cache::default(),
@@ -972,6 +980,7 @@ fn update_inner(state: &mut State, message: ChatMsg, api: &Api) -> (Task<Message
                 state.members_paged = None;
                 state.member_search.clear();
                 state.pinned_open = false;
+                state.search = None;
                 state.thread = None;
                 state.menu = None;
                 state.reply_to = None;
@@ -991,6 +1000,7 @@ fn update_inner(state: &mut State, message: ChatMsg, api: &Api) -> (Task<Message
         }
         ChatMsg::CloseRoom => {
             cancel_recording(state);
+            state.search = None;
             state.selected = None;
             Task::none()
         }
@@ -1837,6 +1847,7 @@ fn update_inner(state: &mut State, message: ChatMsg, api: &Api) -> (Task<Message
             state.pinned_open = true;
             Task::none()
         }
+        ChatMsg::Search(m) => super::chat_search::update(state, m, api),
         ChatMsg::ClosePinned => {
             state.pinned_open = false;
             Task::none()
@@ -1844,12 +1855,12 @@ fn update_inner(state: &mut State, message: ChatMsg, api: &Api) -> (Task<Message
         ChatMsg::JumpTo(id) => {
             state.pinned_open = false;
             let feed = state.selected.as_ref().and_then(|k| state.messages.get(k));
-            match feed.and_then(|f| f.iter().position(|m| m.id == id).map(|i| (i, f.len()))) {
-                Some((i, n)) => {
+            match feed.and_then(|f| f.iter().find(|m| m.id == id)) {
+                Some(_) => {
+                    // Marked (it carries the id the scroll looks for), then scrolled to where it is.
                     state.flash = Some(id);
-                    let y = if n > 1 { i as f32 / (n - 1) as f32 } else { 1.0 };
                     Task::batch([
-                        iced::widget::operation::snap_to(FEED, iced::widget::scrollable::RelativeOffset { x: 0.0, y }),
+                        message_list::scroll_to_flashed(),
                         Task::perform(tokio::time::sleep(std::time::Duration::from_millis(1600)), move |_| msg(ChatMsg::Unflash(id))),
                     ])
                 }
@@ -1900,6 +1911,8 @@ fn update_inner(state: &mut State, message: ChatMsg, api: &Api) -> (Task<Message
                 state.profile = None;
             } else if state.pinned_open {
                 state.pinned_open = false;
+            } else if state.search.is_some() {
+                state.search = None;
             } else if state.editing.is_some() {
                 chat_actions::cancel_edit(state);
             } else if state.reply_to.is_some() {
@@ -1964,6 +1977,7 @@ pub fn on_socket(state: &mut State, event: &Value, api: &Api) -> Task<Message> {
     match name {
         "chat_message" => {
             let Some(m) = parse(event) else { return Task::none() };
+            super::chat_search::observe(state, &m);
             // Their message is here: they've stopped typing.
             if let (Some(who), Some(uid)) = (state.typing.get_mut(&m.room_id), m.sender_id) {
                 who.retain(|(u, _, _)| *u != uid);
@@ -1997,6 +2011,7 @@ pub fn on_socket(state: &mut State, event: &Value, api: &Api) -> Task<Message> {
         }
         "message_edited" | "message_updated" => {
             if let Some(m) = parse(event) {
+                super::chat_search::observe(state, &m);
                 let keys = room_keys(state, &m.room_id);
                 let m = rooms::open_message(m, keys.as_deref());
                 if let Some(t) = state.thread.as_mut() {
@@ -2068,11 +2083,15 @@ pub fn on_socket(state: &mut State, event: &Value, api: &Api) -> Task<Message> {
                 t.replies.retain(|m| !ids.contains(&m.id));
             }
             state.polls.retain(|id, _| !ids.contains(id));
+            super::chat_search::forget(state, &ids);
             Task::none()
         }
         "message_deleted" => {
             if let (Some(feed), Some(id)) = (state.messages.get_mut(&room_id), message_id) {
                 feed.retain(|m| m.id != id);
+            }
+            if let Some(id) = message_id {
+                super::chat_search::forget(state, &HashSet::from([id]));
             }
             if let (Some(t), Some(id)) = (state.thread.as_mut(), message_id) {
                 t.replies.retain(|m| m.id != id);
@@ -2090,6 +2109,7 @@ pub fn on_socket(state: &mut State, event: &Value, api: &Api) -> Task<Message> {
             if let Some(id) = message_id {
                 let pinned = event.get("is_pinned").and_then(Value::as_bool);
                 chat_actions::change(state, id, |m| m.is_pinned = pinned);
+                super::chat_search::set_pinned(state, id, pinned == Some(true));
             }
             Task::none()
         }
@@ -2159,7 +2179,7 @@ pub fn view(state: &State) -> El<'_> {
                 _ => composer::Mode::Write,
             };
             let main = column![
-                chat_header::view(room, state.me_id, state.rooms.get(&room.room_key).and_then(|r| r.join_requests_count).unwrap_or(0), state.members_open),
+                chat_header::view(room, state.me_id, state.rooms.get(&room.room_key).and_then(|r| r.join_requests_count).unwrap_or(0), state.members_open, state.search.as_ref().is_some_and(|s| s.room_key == room.room_key)),
                 hline(),
                 feed_with_panel(state, message_list::view(feed)),
                 composer::view(room, &state.draft, state.sending, state.locked.get(&room.room_key), mode, state.pending_file.as_ref(), state.media.frames("pending").map(|f| f.at(0)), state.pending_finance.as_ref(), state.recording.as_ref(), crate::player::gst().is_some()),
@@ -2167,12 +2187,14 @@ pub fn view(state: &State) -> El<'_> {
             ]
             .width(Fill)
             .height(Fill);
-            match state.thread.as_ref().filter(|t| t.room_key == room.room_key) {
-                Some(t) => {
+            let search = state.search.as_ref().filter(|s| s.room_key == room.room_key);
+            match (state.thread.as_ref().filter(|t| t.room_key == room.room_key), search) {
+                (Some(t), _) => {
                     let locked = state.locked.get(&room.room_key).filter(|_| display::is_encrypted_room(room)).map(KeyProblem::explain);
                     row![main, thread_panel::view(t, rights, state.menu, &room.allowed_users, display::is_encrypted_room(room), locked, &state.media, state.clock, &state.emoji_ui, (&state.cheques, &state.explorers, &state.my_wallets, &state.invoices, &state.me_name, &state.fund))].into()
                 }
-                None if state.members_open && !display::is_dm(room) => {
+                (None, Some(s)) => row![main, search_panel::view(s, state.search_index.get(&room.room_key), display::is_encrypted_room(room), &state.me_name)].into(),
+                (None, None) if state.members_open && !display::is_dm(room) => {
                     let side = members_sidebar::view(members_sidebar::View {
                         room,
                         me: state.me_id,
@@ -2184,8 +2206,8 @@ pub fn view(state: &State) -> El<'_> {
                     });
                     row![main, side].into()
                 }
-                // A row like the two above, so the feed keeps its place when a side panel opens.
-                None => row![main].into(),
+                // A row like the ones above, so the feed keeps its place when a side panel opens.
+                (None, None) => row![main].into(),
             }
         }
         None => empty_state(state),

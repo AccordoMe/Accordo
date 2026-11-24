@@ -79,6 +79,18 @@ impl App {
                 _ => {}
             }
         }
+        // The chat search's suggestions: the arrows go through them.
+        if let Some(s) = self.chat.search.as_ref().filter(|_| self.nav == Nav::Chat) {
+            use crate::pages::chat_search::{suggestions, SearchMsg};
+            let by = match key {
+                Key::Named(Named::ArrowUp) => -1,
+                Key::Named(Named::ArrowDown) => 1,
+                _ => 0,
+            };
+            if by != 0 && !suggestions(&s.query, self.chat.search_index.get(&s.room_key), &self.chat.me_name).is_empty() {
+                return Task::done(Message::Chat(chat_page::ChatMsg::Search(SearchMsg::Move(by))));
+            }
+        }
         if crate::hotkeys::devtools(&key, physical, m) {
             return Task::done(Message::Dev(DevMsg::Toggle));
         }
@@ -160,6 +172,7 @@ impl App {
             }
             Action::ToggleMembers if in_chat => return chat(chat_page::ChatMsg::ToggleMembers),
             Action::Pinned if in_chat => return chat(chat_page::ChatMsg::OpenPinned),
+            Action::Search if in_chat => return chat(chat_page::ChatMsg::Search(crate::pages::chat_search::SearchMsg::Toggle)),
             Action::RoomSettings if in_chat => return chat(chat_page::ChatMsg::OpenManage(crate::components::chat::manage_room::Tab::General)),
             Action::Emoji if in_chat => return chat(chat_page::ChatMsg::OpenEmoji),
             Action::Gifs if in_chat => return chat(chat_page::ChatMsg::OpenGifs),
@@ -171,7 +184,7 @@ impl App {
                     None => chat_page::ChatMsg::RecordStart(crate::recorder::Kind::Voice),
                 });
             }
-            Action::ToggleMembers | Action::Pinned | Action::RoomSettings | Action::Emoji | Action::Gifs | Action::Attach | Action::VoiceMessage => {}
+            Action::ToggleMembers | Action::Pinned | Action::Search | Action::RoomSettings | Action::Emoji | Action::Gifs | Action::Attach | Action::VoiceMessage => {}
             Action::OpenWallet => return Task::done(if self.wallet_open { Message::CloseWallet } else { Message::OpenWallet }),
             Action::Contacts => {
                 use crate::components::contact_picker::{ContactsMsg, Target};
@@ -218,11 +231,11 @@ impl App {
                 }
             }
             Action::ZoomReset => return zoom(self, 1.0),
-            Action::HideScreen => self.hide(),
+            Action::HideScreen => return self.hide(),
             Action::LockWallets => {
                 if self.wallet_session.unlocked() {
-                    self.lock_wallets();
-                    return self.toasts.show(Kind::Info, "Wallets locked");
+                    let forget = self.lock_and_forget_wallets();
+                    return Task::batch([forget, self.toasts.show(Kind::Info, "Wallets locked")]);
                 }
             }
         }

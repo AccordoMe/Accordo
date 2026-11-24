@@ -57,11 +57,19 @@ pub struct State {
     pub phrase_saved: bool,
     pub busy: bool,
     pub error: Option<String>,
+    /// Opened unasked when the account opens (the web's ChatPasswordReminder): the risk note and
+    /// a "Not now".
+    pub reminder: bool,
 }
 
 impl State {
     pub fn new(mode: Mode) -> Self {
         Self { mode, ..Default::default() }
+    }
+
+    /// The reminder: restore the key from the backup, or set a chat password to make one.
+    pub fn reminder(mode: Mode) -> Self {
+        Self { mode, reminder: true, ..Default::default() }
     }
 
     /// The secret to use, once the form is complete.
@@ -159,6 +167,14 @@ pub fn view(state: &State) -> El<'_> {
     .align_y(Alignment::Center);
 
     let mut form: Column<'_, Message> = column![header, text(intro).size(12.5).color(TEXT_SECONDARY).line_height(1.5)].spacing(14);
+    if state.reminder {
+        let risk = if state.mode == Mode::Restore {
+            "Your chat key is backed up on Accordo, but this computer doesn't have it yet. Restore it with your chat password to open your encrypted chats here — don't set a new password, that would start a new key."
+        } else {
+            "Right now your chat key exists only on this computer. Lose it, or reinstall the system, and your encrypted chats are gone for good."
+        };
+        form = form.push(text(risk).size(12.5).color(AMBER_TEXT).line_height(1.5));
+    }
 
     let secret_input = |placeholder: &str, value: &str, on: fn(String) -> KeyBackupMsg| {
         text_input(placeholder, value).secure(!state.show).size(14).padding([10, 12]).style(field).on_input(move |v| Message::KeyBackup(on(v))).on_submit(msg(KeyBackupMsg::Submit))
@@ -253,6 +269,13 @@ pub fn view(state: &State) -> El<'_> {
             .style(tone_button(Tone::Accent))
             .on_press_maybe(ready.then(|| msg(KeyBackupMsg::Submit))),
     );
+    if state.reminder {
+        form = form.push(
+            container(button(text("Not now — remind me next time").size(12.5).color(MUTED)).padding([2, 6]).style(ghost(6.0, rgba(0xffffff, 0.04))).on_press(msg(KeyBackupMsg::Close)))
+                .width(Fill)
+                .align_x(Horizontal::Center),
+        );
+    }
 
     overlay::modal(container(form.align_x(Horizontal::Left)).width(460).padding(20).style(modal), msg(KeyBackupMsg::Close))
 }

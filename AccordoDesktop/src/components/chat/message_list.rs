@@ -4,7 +4,7 @@
 //! thread, pin, copy, edit, delete. Hover a message for the bar, right-click it for the menu.
 
 use iced::widget::{button, center, container, row, scrollable, space, svg, text, Column, Row};
-use iced::{Alignment, Color, Fill, Padding};
+use iced::{Alignment, Color, Fill, Padding, Task};
 
 use super::display;
 use crate::api::chat::{ChatMessageItem, UserInfo};
@@ -92,6 +92,61 @@ pub fn can_delete(m: &ChatMessageItem, r: &Rights) -> bool {
     m.message_type != "deleted" && !is_financial(m) && (m.sender_id == Some(r.me) || r.moderate)
 }
 
+/// The id of the message being jumped to (the one `Feed::flash` marks).
+const JUMP_TARGET: &str = "jump-target";
+
+/// Scrolls the chat so the message being jumped to sits in the middle — found by where it really
+/// is, not guessed from its place in the list (pictures and cards make rows of every height). The
+/// feed is anchored at the bottom, and iced counts its offsets from there.
+pub fn scroll_to_flashed() -> Task<Message> {
+    use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, Scrollable};
+    use iced::advanced::widget::operation::{Operation, Outcome};
+    use iced::advanced::widget::Id;
+    use iced::{Rectangle, Vector};
+
+    #[derive(Default)]
+    struct Find {
+        feed: Option<(Rectangle, Rectangle)>,
+        target: Option<Rectangle>,
+    }
+    impl Operation for Find {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn scrollable(&mut self, id: Option<&Id>, bounds: Rectangle, content: Rectangle, _: Vector, _: &mut dyn Scrollable) {
+            if id == Some(&Id::from(crate::pages::chat_page::FEED)) {
+                self.feed = Some((bounds, content));
+            }
+        }
+        fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+            if id == Some(&Id::from(JUMP_TARGET)) {
+                self.target = Some(bounds);
+            }
+        }
+        fn finish(&self) -> Outcome<()> {
+            let (Some((view, content)), Some(target)) = (self.feed, self.target) else { return Outcome::None };
+            let room = (content.height - view.height).max(0.0);
+            let from_top = (target.y - content.y - (view.height - target.height).max(0.0) / 2.0).clamp(0.0, room);
+            Outcome::Chain(Box::new(Scroll { from_bottom: room - from_top }))
+        }
+    }
+    struct Scroll {
+        from_bottom: f32,
+    }
+    impl Operation for Scroll {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn scrollable(&mut self, id: Option<&Id>, _: Rectangle, _: Rectangle, _: Vector, state: &mut dyn Scrollable) {
+            if id == Some(&Id::from(crate::pages::chat_page::FEED)) {
+                state.scroll_to(AbsoluteOffset { x: None, y: Some(self.from_bottom) });
+            }
+        }
+    }
+    // A moment first: the feed lays out the message (and any history put in front of it).
+    Task::perform(tokio::time::sleep(std::time::Duration::from_millis(40)), |_| ()).then(|()| iced::advanced::widget::operate(Find::default())).discard()
+}
+
 pub fn view<'a>(feed: Feed<'a>) -> El<'a> {
     let Some(list) = feed.messages.filter(|f| !f.is_empty()) else {
         let note = if feed.loading || feed.messages.is_none() { "Loading messages…" } else { "No messages yet — say hello" };
@@ -121,7 +176,9 @@ pub fn view<'a>(feed: Feed<'a>) -> El<'a> {
             end += 1;
         }
         for (k, m) in list[i..end].iter().enumerate() {
-            out = out.push(message(m, k == 0, &feed));
+            let row = message(m, k == 0, &feed);
+            // The message being jumped to carries an id, so `scroll_to_flashed` finds where it is.
+            out = out.push(if feed.flash == Some(m.id) { container(row).id(JUMP_TARGET).into() } else { row });
         }
         i = end;
     }
@@ -151,8 +208,9 @@ pub fn message<'a>(m: &'a ChatMessageItem, head: bool, feed: &Feed<'a>) -> El<'a
     let (mut content, placeholder) = display::message_text(m);
     if let Some(att) = super::msg_render::attachment(m, feed) {
         body = body.push(att);
-        // A poll's "📊 Poll: …" and a draw's title are in the card already.
-        if matches!(m.message_type.as_str(), "poll" | "random_draw" | "audio" | "video") {
+        // A poll's "📊 Poll: …" and a draw's title are in the card already, and so is the
+        // "🎁 Attached Cheque for …" line a card is sent with when its box was left empty.
+        if matches!(m.message_type.as_str(), "poll" | "random_draw" | "audio" | "video") || super::attach_picker::is_default_text(&m.message_type, &content) {
             content.clear();
         }
     }

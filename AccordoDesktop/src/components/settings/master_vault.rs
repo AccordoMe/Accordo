@@ -74,9 +74,9 @@ fn timers<'a>(form: &VaultForm) -> El<'a> {
         chips = chips.push(button(text(*caption).size(11)).padding([3, 8]).style(chip(form.lock == i)).on_press(msg(SettingsMsg::VaultLock(i))));
     }
     let hint = if LOCK_OPTIONS[form.lock].1 == 0 {
-        "Locks again whenever the app is closed."
+        "Locks again whenever the app is closed. The keys stay in this app's memory only."
     } else {
-        "Locks again then, or when the app is closed. Your password is never stored — the keys stay in this app's memory only."
+        "Locks again then. Until then the unlocked keys are kept in the system's secret store, so a restart doesn't lock them (App settings → Storage deletes them). Your password is never stored."
     };
     column![text("Keep unlocked").size(12).font(SEMIBOLD).color(LABEL), chips, note(hint)].spacing(6).into()
 }

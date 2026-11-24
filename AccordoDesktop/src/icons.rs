@@ -65,7 +65,6 @@ icons! {
     x => "x",
     paperclip => "paperclip",
     smile => "smile",
-    phone => "phone",
     video => "video",
     hash => "hash",
     lock => "lock",

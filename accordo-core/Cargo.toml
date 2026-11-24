@@ -34,5 +34,9 @@ zeroize = "1"
 getrandom = "0.4.3"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
+# The unlocked wallet keys locked in RAM, out of swap and core dumps (wallet_session::LockedKey).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 pbkdf2 = "0.12"

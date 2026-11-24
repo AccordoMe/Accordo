@@ -12,6 +12,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hmac",
+ "libc",
  "mime_guess",
  "p256",
  "pbkdf2",
