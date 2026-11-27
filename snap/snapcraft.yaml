@@ -38,7 +38,8 @@ platforms:
 
 apps:
   accordo:
-    command: bin/accordo-native
+    # bin/accordo-launch: the snap's own libraries on the path, then the app.
+    command: bin/accordo-launch
     desktop: usr/share/applications/me.accordo.Accordo.desktop
     # Wayland/X11, the GPU (wgpu), fonts, themes, opening links in the browser.
     extensions: [gnome]
@@ -54,12 +55,6 @@ apps:
       - audio-playback
       - audio-record
       - camera
-    environment:
-      # Media goes through GStreamer's gst-launch-1.0 (src/player.rs, src/recorder.rs), shipped in
-      # the snap with its plugins: the host's isn't visible from inside.
-      GST_PLUGIN_SYSTEM_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gstreamer-1.0
-      GST_PLUGIN_SCANNER: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner
-      GST_REGISTRY: $SNAP_USER_DATA/gstreamer-registry.bin
 
 parts:
   accordo:
@@ -70,6 +65,9 @@ parts:
     rust-path: [AccordoDesktop]
     # aws-lc-sys (rustls) and ring compile C.
     build-packages: [cmake, g++, perl, pkg-config]
+    # Media goes through GStreamer's gst-launch-1.0 (src/player.rs, src/recorder.rs): the host's
+    # isn't visible from inside, so it's shipped here. The extension's desktop-launch finds these
+    # plugins (GST_PLUGIN_PATH = $SNAP/usr/lib/<arch>/gstreamer-1.0) next to the GNOME runtime's.
     stage-packages:
       - gstreamer1.0-tools          # gst-launch-1.0, gst-inspect-1.0
       - gstreamer1.0-plugins-base
@@ -87,3 +85,9 @@ parts:
       install -Dm644 AccordoDesktop/assets/linux/me.accordo.Accordo.desktop "$CRAFT_PART_INSTALL/usr/share/applications/me.accordo.Accordo.desktop"
       install -Dm644 AccordoDesktop/assets/linux/accordo-icon-512.png "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/me.accordo.Accordo.png"
       install -Dm644 AccordoDesktop/assets/accordo-logo.svg "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/scalable/apps/me.accordo.Accordo.svg"
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      accordo-launch: bin/accordo-launch

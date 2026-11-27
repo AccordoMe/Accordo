@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Runs after the GNOME extension's desktop-launch. It puts the GNOME runtime's libraries on the
+# path, not the ones shipped in this snap for GStreamer's plugins (x264, libav, the bad set,
+# PulseAudio): they go after the runtime's, so the runtime's own copies always win.
+case "$(uname -m)" in
+  x86_64) triplet=x86_64-linux-gnu ;;
+  aarch64) triplet=aarch64-linux-gnu ;;
+  *) triplet="$(uname -m)-linux-gnu" ;;
+esac
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$SNAP/usr/lib/$triplet:$SNAP/usr/lib/$triplet/pulseaudio:$SNAP/usr/lib/$triplet/blas:$SNAP/usr/lib/$triplet/lapack"
+exec "$SNAP/bin/accordo-native" "$@"
