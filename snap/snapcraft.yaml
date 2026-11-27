@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The Snap Store package of the desktop client (Ubuntu's App Center).
+#
+#   snapcraft                    build, in an LXD container (sudo snap install lxd && lxd init --auto)
+#   sudo snap install --dangerous ./accordo_*.snap
+#   snapcraft upload --release=edge accordo_*.snap
+#
+# It builds what's on GitHub (main), not this folder: the working copy carries ~120 GB of
+# target/ that snapcraft would copy into the build container. Push first, then build.
+name: accordo
+title: Accordo
+base: core24
+adopt-info: accordo
+summary: Encrypted messenger with crypto payments built into the chat
+description: |
+  Accordo is an end-to-end encrypted messenger where money moves right in the conversation:
+  cheques, invoices (split bills too), crowdfunding campaigns and token drops on EVM networks.
+
+  - Private chats and groups are encrypted on your device; the server only relays ciphertext.
+  - Your wallet's key stays on your computer, locked with your password. Every transaction is
+    shown — and simulated — before you sign it.
+  - Cheques: lock crypto for someone, they claim it when the work is done.
+  - Invoices: bill a client, they pay on-chain.
+  - Crowdfunding: raise money for a goal; backers get it all back if it doesn't go ahead.
+  - Drops: send a token to a list of wallets, at once or in parts over time.
+
+  A native app (Rust, no web view). Open source under the GPL.
+license: GPL-3.0-or-later
+website: https://accordo.me
+source-code: https://github.com/AccordoMe/Accordo
+issues: https://github.com/AccordoMe/Accordo/issues
+icon: AccordoDesktop/assets/linux/accordo-icon-512.png
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+
+apps:
+  accordo:
+    command: bin/accordo-native
+    desktop: usr/share/applications/me.accordo.Accordo.desktop
+    # Wayland/X11, the GPU (wgpu), fonts, themes, opening links in the browser.
+    extensions: [gnome]
+    plugs:
+      - network
+      # The file window (attachments, key files, drop lists) and saving to Downloads.
+      - home
+      # The chat key and the session live in the system's secret store (GNOME Keyring / KWallet).
+      # Not connected on install by default: the store has to grant auto-connection (a request on
+      # forum.snapcraft.io, store-requests). Until then: snap connect accordo:password-manager-service
+      - password-manager-service
+      # Voice messages and video notes: playing, and recording (the last two are asked for).
+      - audio-playback
+      - audio-record
+      - camera
+    environment:
+      # Media goes through GStreamer's gst-launch-1.0 (src/player.rs, src/recorder.rs), shipped in
+      # the snap with its plugins: the host's isn't visible from inside.
+      GST_PLUGIN_SYSTEM_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gstreamer-1.0
+      GST_PLUGIN_SCANNER: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner
+      GST_REGISTRY: $SNAP_USER_DATA/gstreamer-registry.bin
+
+parts:
+  accordo:
+    plugin: rust
+    source: https://github.com/AccordoMe/Accordo.git
+    source-branch: main
+    # The desktop crate; it pulls ../accordo-core by path.
+    rust-path: [AccordoDesktop]
+    # aws-lc-sys (rustls) and ring compile C.
+    build-packages: [cmake, g++, perl, pkg-config]
+    stage-packages:
+      - gstreamer1.0-tools          # gst-launch-1.0, gst-inspect-1.0
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad    # AAC (voaacenc / fdkaac) for voice messages
+      - gstreamer1.0-plugins-ugly   # x264enc for video notes
+      - gstreamer1.0-libav          # decoding what others send (H.264, AAC…)
+      - gstreamer1.0-pulseaudio     # sound in and out through PulseAudio / PipeWire
+      - procps                      # `kill`: stopping a recording cleanly (SIGINT)
+    override-pull: |
+      craftctl default
+      craftctl set version="$(sed -n 's/^version = "\(.*\)"/\1/p' AccordoDesktop/Cargo.toml | head -1)"
+    override-build: |
+      craftctl default
+      install -Dm644 AccordoDesktop/assets/linux/me.accordo.Accordo.desktop "$CRAFT_PART_INSTALL/usr/share/applications/me.accordo.Accordo.desktop"
+      install -Dm644 AccordoDesktop/assets/linux/accordo-icon-512.png "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/me.accordo.Accordo.png"
+      install -Dm644 AccordoDesktop/assets/accordo-logo.svg "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/scalable/apps/me.accordo.Accordo.svg"
