@@ -57,10 +57,28 @@ apps:
       - camera
 
 parts:
+  # Rust from rustup's own installer, into ~/.cargo. The plugin's default (the rustup snap) isn't
+  # found on Launchpad's builders: "'rustup' not found". A part named rust-deps tells the plugin
+  # the toolchain comes from elsewhere, so it skips that snap; its build step has ~/.cargo/bin
+  # on PATH.
+  rust-deps:
+    plugin: nil
+    build-packages: [curl, ca-certificates]
+    override-pull: |
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
+
   accordo:
     plugin: rust
+    after: [rust-deps]
     source: https://github.com/AccordoMe/Accordo.git
     source-branch: main
+    # The toolchain is rust-deps' stable. Otherwise the plugin runs `rustup update` while pulling,
+    # in a shell without ~/.cargo/bin on PATH: "rustup: command not found".
+    rust-channel: none
+    # Ahead of the GNOME extension's PATH (its SDK's usr/bin), so the build's cargo is that stable.
+    build-environment:
+      - PATH: "$HOME/.cargo/bin:$PATH"
     # The desktop crate; it pulls ../accordo-core by path.
     rust-path: [AccordoDesktop]
     # aws-lc-sys (rustls) and ring compile C.
