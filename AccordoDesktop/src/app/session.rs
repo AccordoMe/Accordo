@@ -70,6 +70,30 @@ impl App {
     /// Into the app with a signed-in session: the networks for the top bar, the chat list.
     pub(super) fn enter(&mut self, session: Session) -> Task<Message> {
         tracing::info!("signed in as @{} (id {}) on {}", session.user.username, session.user.id, session.base);
+        // On this computer's list of accounts, as the open one; a fresh sign-in (or the session
+        // from the old single entry) into the credential store.
+        let persist = match self.persist_next.take() {
+            Some(moved_from) if !session.token.is_empty() => {
+                let saved = Saved { moved_from, ..session.saved() };
+                Task::perform(session_store::save(session.key(), saved), |v| Message::Session(SessionMsg::Saved(v)))
+            }
+            _ => Task::none(),
+        };
+        if !session.token.is_empty() {
+            self.store.remember_account(session.user.id, &session.user.username, &session.base);
+            self.store.set_account_avatar(session.user.id, &session.base, session.user.picture());
+        }
+        self.login.back_to = None;
+        if session.user.email_verification_required {
+            // The server answers only /me and the confirming calls until then (backend deps.py):
+            // nothing loads, the code screen is all there is (verify_email.rs). The session is kept,
+            // so the next launch comes back to it; `email_confirmed` enters again from the top.
+            tracing::info!("email not confirmed yet: the code screen");
+            self.lock_wallets();
+            self.verify_email = Default::default();
+            self.session = Some(session);
+            return Task::batch([persist, self.save_store(), operation::focus(crate::pages::verify_email::FIELD_CODE)]);
+        }
         self.chat = chat_page::State::new(session.user.id, session.key());
         self.chat.can_create_public = session.user.can_create_public_rooms || session.user.is_admin;
         self.chat.is_admin = session.user.is_admin;
@@ -108,20 +132,6 @@ impl App {
         if !self.modules().page_shown(self.nav) {
             self.nav = Nav::Chat; // the start page is a section that's been hidden or closed since
         }
-        // On this computer's list of accounts, as the open one; a fresh sign-in (or the session
-        // from the old single entry) into the credential store.
-        let persist = match self.persist_next.take() {
-            Some(moved_from) if !session.token.is_empty() => {
-                let saved = Saved { moved_from, ..session.saved() };
-                Task::perform(session_store::save(session.key(), saved), |v| Message::Session(SessionMsg::Saved(v)))
-            }
-            _ => Task::none(),
-        };
-        if !session.token.is_empty() {
-            self.store.remember_account(session.user.id, &session.user.username, &session.base);
-            self.store.set_account_avatar(session.user.id, &session.base, session.user.picture());
-        }
-        self.login.back_to = None;
         self.reset_module_console(Some(session.user.id));
         // This account's local data (check vault…) and its wallets; another account's keys go —
         // and this one's come back if a lock timer was still running when it was last open.
@@ -158,6 +168,17 @@ impl App {
         Task::batch([persist, chains, chat, key, fixed, saved, unsaved, orgs, dev, resume])
     }
 
+    /// The email is confirmed (verify_email.rs): into the app as at any sign-in, with the user as
+    /// the server has it now.
+    pub(super) fn email_confirmed(&mut self, user: Box<auth::User>) -> Task<Message> {
+        let Some(mut session) = self.session.take() else { return Task::none() };
+        tracing::info!("email confirmed for @{}", session.user.username);
+        session.user = *user;
+        self.verify_email = Default::default();
+        let note = self.toasts.show(Kind::Success, "Email confirmed");
+        Task::batch([self.enter(session), note])
+    }
+
     /// Covers the window (and locks the wallets, if that's on — kept keys included).
     pub(super) fn hide(&mut self) -> Task<Message> {
         if self.session.is_none() || self.hidden {
@@ -176,6 +197,7 @@ impl App {
     /// goes (its chat, lists, unlocked wallet keys).
     pub(super) fn leave(&mut self) {
         self.session = None;
+        self.verify_email = Default::default();
         self.lists = Default::default();
         self.attach = None;
         self.admin = Default::default();

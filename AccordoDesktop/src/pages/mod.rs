@@ -18,6 +18,7 @@ pub mod login;
 pub mod room_admin;
 pub mod settings_page;
 pub mod splash;
+pub mod verify_email;
 
 #[cfg_attr(not(feature = "drops"), allow(dead_code))] // Run, Info, Batch: sent only by the drops and campaign pages
 /// What a page asks the app to do after handling one of its messages.

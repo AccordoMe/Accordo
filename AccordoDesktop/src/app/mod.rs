@@ -123,6 +123,8 @@ pub enum Message {
     ToggleRail,
     Navigate(Nav),
     Login(LoginMsg),
+    /// The confirm-your-email screen (an account whose email isn't confirmed yet).
+    Verify(crate::pages::verify_email::VerifyMsg),
     Chat(ChatMsg),
     /// The live connection (chat messages, room changes…).
     Socket(SocketEvent),
@@ -210,6 +212,8 @@ pub struct App {
     /// from an older entry — named here — which moves under the account's key).
     persist_next: Option<Option<String>>,
     pub login: login::State,
+    /// The code typed on the confirm-your-email screen (see `awaiting_email`).
+    pub verify_email: crate::pages::verify_email::State,
     pub chat: chat_page::State,
     pub nav: Nav,
     pub rail_hidden: bool,
@@ -312,6 +316,7 @@ impl App {
             restoring: saved.is_some(),
             persist_next: saved.as_ref().and_then(|s| s.moved_from.clone()).map(Some),
             login: login::State::default(),
+            verify_email: Default::default(),
             chat: chat_page::State::new(0, String::new()),
             nav: Nav::Chat,
             rail_hidden: false,
@@ -433,6 +438,17 @@ impl App {
                     }
                 }
             },
+            Message::Verify(msg) => {
+                use crate::pages::verify_email::{self, Outcome as Verified};
+                let Some(session) = self.session.as_ref() else { return Task::none() };
+                match verify_email::update(&mut self.verify_email, session, msg) {
+                    Verified::None => {}
+                    Verified::Task(task) => return task,
+                    Verified::Confirmed(user) => return self.email_confirmed(user),
+                    Verified::Error(message) => return self.toasts.show(Kind::Error, message),
+                    Verified::Notice(message) => return self.toasts.show(Kind::Success, message),
+                }
+            }
             Message::Chat(msg) => {
                 let Some(api) = self.session.as_ref().map(Session::api) else { return Task::none() };
                 let (task, error) = chat_page::update(&mut self.chat, msg, &api);
@@ -848,6 +864,7 @@ impl App {
         let screen = match &self.session {
             None if self.restoring => layout::auth(splash::view()),
             None => layout::auth(login::view(&self.login, self.store.accounts_by_use())),
+            Some(session) if session.user.email_verification_required => layout::auth(crate::pages::verify_email::view(&self.verify_email, session)),
             Some(session) => layout::app(self, session),
         };
         // Windows over the screen, bottom to top. The screen is always the first layer of one
@@ -1020,6 +1037,11 @@ impl App {
     /// The wallet picked in the wallet drawer (the web's activeWalletId: an id or an address).
     /// The one place that answers "which wallet" — the top bar, the faucet, payments read it.
     /// Which sections are on: the build, the server's closed ones and the user's hidden ones.
+    /// Signed in, but the email isn't confirmed: only the confirm-your-email screen is up.
+    pub fn awaiting_email(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| s.user.email_verification_required)
+    }
+
     pub fn modules(&self) -> crate::modules::Modules {
         crate::modules::Modules::new(&self.server_closed, &self.store.hidden_modules)
     }
@@ -1089,7 +1111,8 @@ impl App {
         // The open panel redraws when something new was recorded.
         let dev = self.devtools.open.then(|| iced::time::every(std::time::Duration::from_millis(400)).map(|_| Message::Dev(DevMsg::Tick)));
         // Signed in: the live connection (restarts when the account or server changes).
-        let live = self.session.as_ref().filter(|s| !s.token.is_empty()).map(|s| {
+        // Not before the email is confirmed: the server would refuse it.
+        let live = self.session.as_ref().filter(|s| !s.token.is_empty() && !s.user.email_verification_required).map(|s| {
             let key = SocketKey { base: s.base.clone(), token: s.token.clone(), user_id: s.user.id, username: s.user.username.clone() };
             Subscription::run_with(key, socket::connect).map(Message::Socket)
         });

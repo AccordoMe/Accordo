@@ -109,7 +109,8 @@ impl App {
             }
             _ => {}
         }
-        if !self.store.shortcuts || self.session.is_none() {
+        // Signed out, or only the confirm-your-email screen up: no shortcuts into the app.
+        if !self.store.shortcuts || self.session.is_none() || self.awaiting_email() {
             return Task::none();
         }
         let Some(action) = crate::hotkeys::action(&self.store.hotkeys, &key, physical, m) else { return Task::none() };
