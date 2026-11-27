@@ -17,6 +17,9 @@ use crate::theme::*;
 pub struct Field {
     pub loading: bool,
     pub logo: Option<image::Handle>,
+    /// The active wallet's balance of the picked token ("0.0421 ETH", "…" while read) and what
+    /// it's worth ("≈ $123.45") when priced.
+    pub balance: Option<(String, Option<String>)>,
 }
 
 fn open(p: Purpose) -> Message {
@@ -40,8 +43,15 @@ pub fn view<'a>(f: Field, selected: Option<&'a Token>, purpose: Purpose) -> El<'
             token_picker::logo(t, f.logo.as_ref(), 24.0),
             column![text(t.symbol.clone()).size(13.5).font(BOLD).color(Color::WHITE), text(t.name.clone()).size(11).color(TEXT_SECONDARY)].spacing(0),
             space().width(Fill),
-            icon(icons::chevron_down(), 14, MUTED),
         ]
+        .extend(f.balance.map(|(amount, usd)| -> El<'a> {
+            let label = match usd {
+                Some(usd) => row![text("Balance").size(10).color(FAINT), text(usd).size(10).color(TEXT_SECONDARY)].spacing(5),
+                None => row![text("Balance").size(10).color(FAINT)],
+            };
+            column![label, text(amount).size(12.5).font(SEMIBOLD).color(TEXT_BODY)].spacing(0).align_x(Alignment::End).into()
+        }))
+        .push(icon(icons::chevron_down(), 14, MUTED))
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),

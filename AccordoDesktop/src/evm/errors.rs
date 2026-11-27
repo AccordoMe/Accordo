@@ -28,6 +28,8 @@ pub enum TxError {
     Decode,
     /// Anything else, already in words.
     Other(String),
+    /// A dry run (`Wallet::planner`) reached the real transaction and stopped there, unsent.
+    Planned,
 }
 
 impl TxError {
@@ -108,7 +110,8 @@ pub fn decode_revert(data: &[u8]) -> Option<String> {
     if sel == selector("Error(string)") {
         use alloy_sol_types::SolValue;
         if let Ok(msg) = String::abi_decode(&data[4..]) {
-            return Some(format!("The contract rejected it: {msg}"));
+            // OpenZeppelin 4's "ERC20: transfer amount exceeds balance" and the like, in words.
+            return Some(explain_message(&msg).map(str::to_string).unwrap_or_else(|| format!("The contract rejected it: {msg}")));
         }
     }
     CUSTOM_ERRORS.iter().find(|(sig, _)| selector(sig) == sel).map(|(_, text)| text.to_string())
@@ -166,6 +169,7 @@ impl fmt::Display for TxError {
             TxError::Empty => f.write_str("Not found on-chain."),
             TxError::Decode => f.write_str("The node gave an answer this app can't read."),
             TxError::Other(s) => f.write_str(s),
+            TxError::Planned => f.write_str("Simulated only — nothing was sent."),
         }
     }
 }

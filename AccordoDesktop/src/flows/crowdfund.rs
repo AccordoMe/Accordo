@@ -69,6 +69,7 @@ pub struct LaunchDraft {
     pub all_or_nothing: bool,
 }
 
+#[derive(Clone)]
 pub struct LaunchJob {
     pub draft: LaunchDraft,
     pub chain: Chain,
@@ -147,6 +148,7 @@ pub struct BackAsk {
     pub wallet: MyWallet,
 }
 
+#[derive(Clone)]
 pub struct BackJob {
     pub chain: Chain,
     pub rpc_urls: Vec<String>,
@@ -242,6 +244,7 @@ pub struct ActionAsk {
     pub wallets: Vec<MyWallet>,
 }
 
+#[derive(Clone)]
 pub struct ActionJob {
     pub action: Action,
     pub chain: Chain,

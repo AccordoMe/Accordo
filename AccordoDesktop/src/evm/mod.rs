@@ -6,12 +6,14 @@
 
 pub mod abi;
 pub mod balances;
+pub mod builder_code;
 pub mod cheques;
 pub mod client;
 pub mod crowdfund;
 pub mod drops;
 pub mod errors;
 pub mod invoices;
+pub mod simulate;
 
 #[cfg(test)]
 mod tests;

@@ -94,8 +94,11 @@ impl Purpose {
     }
 }
 
-fn home() -> PathBuf {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+/// The person's home folder — where their files are. Inside a snap $HOME is the app's own folder
+/// (~/snap/accordo/<revision>), and the real one is $SNAP_REAL_HOME.
+pub fn home() -> PathBuf {
+    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if cfg!(windows) { var("USERPROFILE") } else { var("SNAP_REAL_HOME").or_else(|| var("HOME")) }.unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Where downloads usually are: XDG's setting on Linux, ~/Downloads elsewhere.

@@ -73,6 +73,8 @@ pub struct CampaignContributionRead {
     pub id: i64,
     pub campaign_id: String,
     pub contributor_username: Option<String>,
+    /// Who it's from as its payer wrote it (the public campaign page's "From") — a name, not an account.
+    pub contributor_name: Option<String>,
     pub contributor_address: String,
     pub gross_amount: f64,
     pub fee_paid: f64,

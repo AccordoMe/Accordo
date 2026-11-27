@@ -20,10 +20,12 @@ use iced::Task;
 
 use crate::app::Message;
 use crate::components::tx_review::{Failed, Finished, TxMsg};
-use crate::evm::client::Progress;
+use crate::api::client::Api;
+use crate::evm::client::{Progress, Wallet};
 use crate::evm::errors::TxError;
 
 /// What the review window runs on Confirm.
+#[derive(Clone)]
 pub enum Job {
     Cheque(Box<cheques::Job>),
     Claim(Box<claim::Job>),
@@ -118,6 +120,94 @@ impl Job {
             Job::Campaign(_) => Kind::Campaign,
         }
     }
+}
+
+/// Who signs a job, and where.
+pub struct Signer {
+    pub vault: crate::store::app_store::WalletVault,
+    pub address: String,
+    pub rpc_urls: Vec<String>,
+    pub chain_id: Option<u64>,
+    /// The network's coin ("ETH").
+    pub native: String,
+}
+
+impl Job {
+    /// The wallet and network the job signs with; None when Accordo submits it (AccordoTask
+    /// claims: nothing is signed here, Accordo pays the gas).
+    pub fn signer(&self) -> Option<Signer> {
+        use crate::api::data::Chain;
+        fn of(w: &claim::MyWallet, urls: &[String], chain: &Chain) -> Signer {
+            Signer { vault: w.vault.clone(), address: w.address.clone(), rpc_urls: urls.to_vec(), chain_id: chain.evm_id(), native: chain.native_symbol.clone() }
+        }
+        Some(match self {
+            Job::Cheque(j) => Signer { vault: j.wallet_vault.clone(), address: j.wallet_address.clone(), rpc_urls: j.rpc_urls.clone(), chain_id: j.chain.evm_id(), native: j.chain.native_symbol.clone() },
+            Job::Claim(c) => match c.as_ref() {
+                claim::Job::Cheques(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+                claim::Job::Task { .. } => return None,
+            },
+            Job::CreateInvoice(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            Job::PayInvoice(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            #[cfg(feature = "drops")]
+            Job::Drop(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            #[cfg(feature = "drops")]
+            Job::DropRefund(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            #[cfg(feature = "drops")]
+            Job::DropClaim(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            #[cfg(feature = "crowdfund")]
+            Job::Launch(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            #[cfg(feature = "crowdfund")]
+            Job::Back(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+            #[cfg(feature = "crowdfund")]
+            Job::Campaign(j) => of(&j.wallet, &j.rpc_urls, &j.chain),
+        })
+    }
+}
+
+/// Runs a job's flow with this wallet: the real one on Confirm, or a planner (the simulation).
+pub async fn run_job(job: Job, wallet: Wallet, api: Api, out: mpsc::UnboundedSender<TxMsg>) -> Result<Finished, Failed> {
+    match job {
+        Job::Cheque(j) => cheques::run(*j, wallet, api, out).await,
+        Job::Claim(c) => match *c {
+            claim::Job::Cheques(j) => claim::run_cheques(*j, wallet, api, out).await,
+            claim::Job::Task { cheque_id, recipient } => claim::run_task(cheque_id, recipient, api).await,
+        },
+        Job::CreateInvoice(j) => invoices::run_create(*j, wallet, api, out).await,
+        Job::PayInvoice(j) => invoices::run_pay(*j, wallet, api, out).await,
+        #[cfg(feature = "drops")]
+        Job::Drop(j) => drops::run_create(*j, wallet, api, out).await,
+        #[cfg(feature = "drops")]
+        Job::DropRefund(j) => drops::run_refund(*j, wallet, api, out).await,
+        #[cfg(feature = "drops")]
+        Job::DropClaim(j) => drops::run_claim(*j, wallet, api, out).await,
+        #[cfg(feature = "crowdfund")]
+        Job::Launch(j) => crowdfund::run_launch(*j, wallet, api, out).await,
+        #[cfg(feature = "crowdfund")]
+        Job::Back(j) => crowdfund::run_back(*j, wallet, api, out).await,
+        #[cfg(feature = "crowdfund")]
+        Job::Campaign(j) => crowdfund::run_action(*j, wallet, api, out).await,
+    }
+}
+
+/// The review window's check before signing: the job's flow run dry (no key, nothing sent,
+/// nothing saved — the flow stops at its real transaction), then what it would send simulated.
+pub async fn simulate(job: Job, api: Api) -> Result<crate::evm::simulate::Outcome, String> {
+    let Some(side) = job.signer() else { return Err("Accordo submits this one — nothing to simulate".into()) };
+    let from: alloy_primitives::Address = side.address.trim().parse().map_err(|_| "Not an EVM wallet".to_string())?;
+    let rpc = crate::evm::client::Rpc::new(side.rpc_urls, side.chain_id).map_err(|e| e.to_string())?;
+    let (wallet, plan) = Wallet::planner(from, rpc.clone());
+    let (out, _ignored) = mpsc::unbounded::<TxMsg>();
+    let ran = run_job(job, wallet, api, out).await;
+    let plan = plan.lock().map(|p| p.clone()).unwrap_or_default();
+    // A dry run ends at its real transaction; one that ended before it failed on the way (a
+    // read, a wrong network) — that's the answer.
+    if !plan.iter().any(|p| !p.approve) {
+        return Err(match ran {
+            Err(f) => f.message,
+            Ok(_) => "There's nothing to simulate".into(),
+        });
+    }
+    crate::evm::simulate::run(&rpc, from, plan, side.native).await.map_err(|e| e.to_string())
 }
 
 pub fn failed(hash: Option<B256>) -> impl Fn(TxError) -> Failed {

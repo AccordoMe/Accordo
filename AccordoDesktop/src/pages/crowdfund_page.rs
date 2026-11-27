@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Crowdfunding (CrowdfundPage.tsx): launch a campaign, back one, the protocol in short.
+//! Crowdfunding (CrowdfundPage.tsx): launch a campaign, back one, the protocol in short — and a
+//! campaign's own window (CampaignDetailsCard.tsx): its story and numbers, its backers and what they
+//! wrote, what you can do with it, and its public page (/fund/<id>) to share.
 
-use iced::widget::{button, checkbox, column, container, responsive, rich_text, row, scrollable, space, span, svg, text, Column, Row};
-use iced::{Alignment, Color, Fill, Font};
+use iced::widget::{button, checkbox, column, container, mouse_area, responsive, rich_text, row, scrollable, space, span, stack, svg, text, Column, Row};
+use iced::{Alignment, Color, Fill, Font, Length, Padding};
 
 use super::Effect;
 use crate::api::client::Api;
-use crate::api::crowdfund::{CampaignRead, CampaignStatus, MyCampaigns};
+use crate::api::crowdfund::{CampaignContributionRead, CampaignDetail, CampaignRead, CampaignStatus, MyCampaigns};
 use crate::api::data::Token;
 use crate::flows::crowdfund::{Action, BackDraft, LaunchDraft};
 use crate::app::Message;
@@ -37,9 +39,32 @@ pub enum Model {
     AllOrNothing,
 }
 
+/// The campaign window's sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailTab {
+    Story,
+    Backers,
+}
+
+/// A campaign opened in its window.
+pub struct Opened {
+    pub campaign: CampaignRead,
+    pub tab: DetailTab,
+    /// Its contributions, newest first (None: loading).
+    pub backers: Option<Result<Vec<CampaignContributionRead>, String>>,
+}
+
 #[derive(Debug, Clone)]
 pub enum CrowdfundMsg {
     Tab(CrowdfundTab),
+    /// Open a campaign in its window (then read its details and backers).
+    Open(Box<CampaignRead>),
+    Close,
+    Detail(DetailTab),
+    Detailed(String, Result<Box<CampaignDetail>, String>),
+    /// Its public page (/fund/<id>): copy the link / open it in the browser.
+    CopyLink(String),
+    OpenPage(String),
     Title(String),
     Category(usize),
     Target(String),
@@ -90,6 +115,8 @@ pub struct State {
     pub looked: Option<Result<CampaignRead, String>>,
     pub explore: Option<Result<Vec<CampaignRead>, String>>,
     pub mine: Option<Result<MyCampaigns, String>>,
+    /// The campaign window, when one is open.
+    pub open: Option<Opened>,
 }
 
 impl Default for State {
@@ -112,6 +139,7 @@ impl Default for State {
             looked: None,
             explore: None,
             mine: None,
+            open: None,
         }
     }
 }
@@ -123,7 +151,17 @@ pub fn reload(state: &mut State, api: &Api) -> iced::Task<Message> {
         let id = c.campaign_id.clone();
         tasks.push(lookup(api, id));
     }
+    // The open window shows the change too (a contribution, a withdrawal, refunds).
+    if let Some(o) = &state.open {
+        tasks.push(detail(api, o.campaign.campaign_id.clone()));
+    }
     iced::Task::batch(tasks)
+}
+
+/// A campaign's details and backers, for its window.
+fn detail(api: &Api, id: String) -> iced::Task<Message> {
+    let k = id.clone();
+    iced::Task::perform(crate::api::crowdfund::get(api.clone(), id), move |r| msg(CrowdfundMsg::Detailed(k.clone(), r.map(Box::new).map_err(|e| e.message))))
 }
 
 fn lookup(api: &Api, id: String) -> iced::Task<Message> {
@@ -202,7 +240,33 @@ pub fn update(state: &mut State, msg: CrowdfundMsg, api: Option<Api>) -> Effect 
         CrowdfundMsg::Explore(r) => state.explore = Some(r),
         CrowdfundMsg::Mine(r) => state.mine = Some(r.map(|b| *b)),
         CrowdfundMsg::Refresh => return api.map(|a| Effect::Run(load_tab(state, &a, true))).unwrap_or(Effect::None),
+        CrowdfundMsg::Open(c) => {
+            let id = c.campaign_id.clone();
+            state.open = Some(Opened { campaign: *c, tab: DetailTab::Story, backers: None });
+            return api.map(|a| Effect::Run(detail(&a, id))).unwrap_or(Effect::None);
+        }
+        CrowdfundMsg::Close => state.open = None,
+        CrowdfundMsg::Detail(t) => {
+            if let Some(o) = state.open.as_mut() {
+                o.tab = t;
+            }
+        }
+        CrowdfundMsg::Detailed(id, r) => {
+            if let Some(o) = state.open.as_mut().filter(|o| o.campaign.campaign_id.eq_ignore_ascii_case(&id)) {
+                match r {
+                    Ok(d) => {
+                        let d = *d;
+                        o.campaign = d.campaign;
+                        o.backers = Some(Ok(d.contributions));
+                    }
+                    Err(e) => o.backers = Some(Err(e)),
+                }
+            }
+        }
+        CrowdfundMsg::CopyLink(id) => return Effect::CopyWeb(format!("/fund/{id}"), "Campaign link"),
+        CrowdfundMsg::OpenPage(id) => return Effect::OpenWeb(format!("/fund/{id}")),
         CrowdfundMsg::Pick(id) => {
+            state.open = None;
             state.tab = CrowdfundTab::Back;
             state.campaign_id = id.clone();
             state.looked = None;
@@ -243,7 +307,7 @@ pub fn update(state: &mut State, msg: CrowdfundMsg, api: Option<Api>) -> Effect 
         }
         CrowdfundMsg::BackerNote(v) => state.backer_note = v,
         CrowdfundMsg::Understood(v) => state.understood = v,
-        CrowdfundMsg::Terms => return Effect::OpenWeb("/terms/crowdfunding"),
+        CrowdfundMsg::Terms => return Effect::OpenWeb("/terms/crowdfunding".into()),
         CrowdfundMsg::Back => {
             if state.campaign_id.trim().is_empty() {
                 return Effect::Error("Please select a campaign to support!".into());
@@ -284,7 +348,11 @@ pub fn view<'a>(state: &'a State, tokens: token_select::Field, native: &'a str, 
                 split(size.width, launch_card(state, tokens.clone(), native), column![preview, protocol_card()].spacing(20).into())
             }
         };
-        scrollable(container(column![tabs, body].spacing(24)).padding([20, 24]).width(Fill)).height(Fill).style(thin_scroll).into()
+        let page: El = scrollable(container(column![tabs, body].spacing(24)).padding([20, 24]).width(Fill)).height(Fill).style(thin_scroll).into();
+        match &state.open {
+            Some(o) => stack![page, crate::components::overlay::modal(campaign_window(o, me), msg(CrowdfundMsg::Close))].into(),
+            None => page,
+        }
     })
     .into()
 }
@@ -714,6 +782,33 @@ pub fn campaign_card<'a>(c: &'a CampaignRead, actions: Vec<El<'a>>) -> El<'a> {
     .into()
 }
 
+/// What the creator can do with their campaign now (My Pools and its window alike).
+fn creator_actions<'a>(c: &CampaignRead) -> Vec<El<'a>> {
+    let mut actions = Vec::new();
+    match c.status {
+        CampaignStatus::Active => {
+            if c.goal_reached == Some(true) {
+                actions.push(act(c, "End early", Action::EndEarly, false));
+            }
+            actions.push(act(c, "Refund everyone", Action::RefundAll, true));
+        }
+        CampaignStatus::Ended => {
+            if c.is_all_or_nothing != Some(true) || c.goal_reached == Some(true) {
+                actions.push(act(c, "Withdraw", Action::Withdraw, false));
+            }
+            actions.push(act(c, "Refund everyone", Action::RefundAll, true));
+        }
+        CampaignStatus::Claimed if c.net_raised_amount - c.claimed_amount > 1e-12 => actions.push(act(c, "Withdraw the rest", Action::Withdraw, false)),
+        _ => {}
+    }
+    actions
+}
+
+/// A campaign card that opens the campaign's window when clicked (its buttons keep their own clicks).
+fn openable<'a>(c: &CampaignRead, card: El<'a>) -> El<'a> {
+    mouse_area(card).on_press(msg(CrowdfundMsg::Open(Box::new(c.clone())))).interaction(iced::mouse::Interaction::Pointer).into()
+}
+
 fn act<'a>(c: &CampaignRead, caption: &'a str, a: Action, danger: bool) -> El<'a> {
     button(text(caption).size(12).font(SEMIBOLD)).padding([6, 12]).style(tone_button(if danger { Tone::Danger } else { Tone::Dark })).on_press(msg(CrowdfundMsg::Act(Box::new(c.clone()), a))).into()
 }
@@ -753,7 +848,7 @@ fn explore_view<'a>(state: &'a State, me: &'a str) -> El<'a> {
                     actions.push(button(row![icon(icons::flame(), 12, Color::WHITE), text("Back").size(12).font(SEMIBOLD)].spacing(5).align_y(Alignment::Center)).padding([6, 14]).style(tone_button(Tone::Accent)).on_press(msg(CrowdfundMsg::Pick(c.campaign_id.clone()))).into());
                 }
                 actions.push(button(icon(icons::copy(), 12, MUTED)).padding(6).style(ghost(6.0, rgba(0xffffff, 0.06))).on_press(Message::CopyText(c.campaign_id.clone(), "Campaign ID")).into());
-                col = col.push(campaign_card(c, actions));
+                col = col.push(openable(c, campaign_card(c, actions)));
             }
             col.into()
         }
@@ -771,25 +866,9 @@ fn mine_view<'a>(state: &'a State) -> El<'a> {
             if !m.created.is_empty() {
                 col = col.push(text("LAUNCHED BY YOU").size(10.5).font(BOLD).color(FAINT));
                 for c in &m.created {
-                    let mut actions = Vec::new();
-                    match c.status {
-                        CampaignStatus::Active => {
-                            if c.goal_reached == Some(true) {
-                                actions.push(act(c, "End early", Action::EndEarly, false));
-                            }
-                            actions.push(act(c, "Refund everyone", Action::RefundAll, true));
-                        }
-                        CampaignStatus::Ended => {
-                            if c.is_all_or_nothing != Some(true) || c.goal_reached == Some(true) {
-                                actions.push(act(c, "Withdraw", Action::Withdraw, false));
-                            }
-                            actions.push(act(c, "Refund everyone", Action::RefundAll, true));
-                        }
-                        CampaignStatus::Claimed if c.net_raised_amount - c.claimed_amount > 1e-12 => actions.push(act(c, "Withdraw the rest", Action::Withdraw, false)),
-                        _ => {}
-                    }
+                    let mut actions = creator_actions(c);
                     actions.push(button(icon(icons::copy(), 12, MUTED)).padding(6).style(ghost(6.0, rgba(0xffffff, 0.06))).on_press(Message::CopyText(c.campaign_id.clone(), "Campaign ID")).into());
-                    col = col.push(campaign_card(c, actions));
+                    col = col.push(openable(c, campaign_card(c, actions)));
                 }
             }
             if !m.backed.is_empty() {
@@ -802,13 +881,256 @@ fn mine_view<'a>(state: &'a State) -> El<'a> {
                     if c.status == CampaignStatus::Active {
                         actions.push(button(text("Back again").size(12).font(SEMIBOLD)).padding([6, 12]).style(tone_button(Tone::Dark)).on_press(msg(CrowdfundMsg::Pick(c.campaign_id.clone()))).into());
                     }
-                    col = col.push(campaign_card(c, actions));
+                    col = col.push(openable(c, campaign_card(c, actions)));
                 }
             }
             col.into()
         }
     };
     list_frame("My Pools", "Campaigns you launched or backed.", body)
+}
+
+/// Who a contribution is from: the account, the name its payer wrote (public page), or the wallet.
+fn backer_name(b: &CampaignContributionRead) -> String {
+    match (&b.contributor_username, b.contributor_name.as_deref().map(str::trim).filter(|n| !n.is_empty())) {
+        (Some(u), _) if !u.is_empty() => format!("@{u}"),
+        (_, Some(n)) => n.to_string(),
+        _ => crate::wallets::short_address(&b.contributor_address),
+    }
+}
+
+/// A date from the API, shown locally ("Nov 25, 2026, 14:05").
+fn when(iso: Option<&str>) -> String {
+    iso.and_then(crate::components::chat::display::local).map(|t| t.format("%b %-d, %Y, %H:%M").to_string()).unwrap_or_else(|| "—".into())
+}
+
+/// The campaign's window: on the left its cover, title, sections and what you can do; on the
+/// right the story and numbers, or the backers and what they wrote.
+fn campaign_window<'a>(o: &'a Opened, me: &'a str) -> El<'a> {
+    let c = &o.campaign;
+    let tint = cover_tint(&c.category);
+    let (status, tone) = status_of(c);
+    let mine = c.creator_username.eq_ignore_ascii_case(me);
+    let backers_count = o.backers.as_ref().and_then(|r| r.as_ref().ok()).map_or(c.contributors_count as usize, Vec::len);
+
+    let nav = |t: DetailTab, handle: svg::Handle, label: String| -> El<'a> {
+        let active = o.tab == t;
+        button(row![icon(handle, 15, if active { Color::WHITE } else { MUTED }), text(label).size(13).font(SEMIBOLD)].spacing(10).align_y(Alignment::Center))
+            .width(Fill)
+            .padding([9, 12])
+            .style(selectable(active, rgba(0x6366f1, 0.22), 8.0))
+            .on_press(msg(CrowdfundMsg::Detail(t)))
+            .into()
+    };
+    let wide = |b: iced::widget::Button<'a, Message>| -> El<'a> { b.width(Fill).padding([9, 12]).into() };
+
+    // What you can do with it now.
+    let mut actions: Column<'a, Message> = column![].spacing(8);
+    if mine {
+        for a in creator_actions(c) {
+            actions = actions.push(container(a).width(Fill));
+        }
+    } else if c.status == CampaignStatus::Active && c.hidden != Some(true) {
+        actions = actions.push(wide(
+            button(row![icon(icons::flame(), 14, Color::WHITE), text("Back this campaign").size(13).font(SEMIBOLD)].spacing(8).align_y(Alignment::Center))
+                .style(tone_button(Tone::Accent))
+                .on_press(msg(CrowdfundMsg::Pick(c.campaign_id.clone()))),
+        ));
+    } else if c.status == CampaignStatus::Refunding {
+        actions = actions.push(container(act(c, "Get my refund", Action::Refund, false)).width(Fill));
+    }
+    let link_button = |handle: svg::Handle, label: &'static str, m: CrowdfundMsg| -> El<'a> {
+        wide(button(row![icon(handle, 13, TEXT_BODY), text(label).size(12.5)].spacing(8).align_y(Alignment::Center)).style(tone_button(Tone::Dark)).on_press(msg(m)))
+    };
+
+    let side = container(
+        column![
+            container(
+                row![
+                    container(icon(icons::flame(), 22, Color::WHITE)).width(44).height(44).center(44).style(boxed(rgba(tint, 0.55), rgba(0xffffff, 0.15), 12.0)),
+                    space().width(Fill),
+                    container(text(status).size(10).font(BOLD).color(tone)).padding([3, 8]).style(boxed(rgba(0x000000, 0.35), rgba(0xffffff, 0.08), 999.0)),
+                ]
+                .align_y(Alignment::Start),
+            )
+            .width(Fill)
+            .padding(12)
+            .style(move |_| container::Style {
+                background: Some(iced::Background::Gradient(iced::Gradient::Linear(iced::gradient::Linear::new(iced::Radians(2.4)).add_stop(0.0, rgba(tint, 0.45)).add_stop(1.0, rgba(tint, 0.06))))),
+                border: border(rgba(tint, 0.3), 1.0, 12.0),
+                ..Default::default()
+            }),
+            column![
+                text(c.title.clone()).size(16).font(BOLD).color(Color::WHITE),
+                text(format!("by @{} · {}", c.creator_username, c.chain_name)).size(11.5).color(TEXT_SECONDARY),
+            ]
+            .spacing(3),
+            container(space().width(Fill).height(1)).style(theme::rule),
+            column![nav(DetailTab::Story, icons::file_text(), "Story".into()), nav(DetailTab::Backers, icons::users(), format!("Backers ({backers_count})"))].spacing(4),
+            space().height(Fill),
+            actions,
+            column![
+                link_button(icons::copy(), "Copy public link", CrowdfundMsg::CopyLink(c.campaign_id.clone())),
+                link_button(icons::external_link(), "Open public page", CrowdfundMsg::OpenPage(c.campaign_id.clone())),
+            ]
+            .spacing(6),
+        ]
+        .spacing(14),
+    )
+    .width(250)
+    .height(Fill)
+    .padding([18, 14])
+    .style(boxed(hex(0x0f1016), Color::TRANSPARENT, 14.0));
+
+    let (heading, sub) = match o.tab {
+        DetailTab::Story => ("Story", "What it's for and how far it got"),
+        DetailTab::Backers => ("Backers", "Who backed it and what they wrote"),
+    };
+    let header = row![
+        column![text(heading).size(18).font(BOLD).color(Color::WHITE), text(sub).size(12).color(TEXT_SECONDARY)].spacing(2),
+        space().width(Fill),
+        button(icon(icons::x(), 18, MUTED)).padding(6).style(ghost(8.0, rgba(0xffffff, 0.06))).on_press(msg(CrowdfundMsg::Close)),
+    ]
+    .align_y(Alignment::Center);
+    let body = match o.tab {
+        DetailTab::Story => story(c, mine),
+        DetailTab::Backers => backers(o),
+    };
+    let main = column![
+        container(header).padding(Padding { top: 20.0, right: 20.0, bottom: 14.0, left: 26.0 }),
+        container(space().width(Fill).height(1)).style(theme::rule),
+        scrollable(container(body).width(Fill).padding(Padding { top: 18.0, right: 26.0, bottom: 24.0, left: 26.0 })).height(Fill).style(thin_scroll),
+    ]
+    .width(Fill);
+    container(row![side, main]).width(Length::Fixed(900.0)).height(Length::Fixed(620.0)).style(theme::modal).into()
+}
+
+/// The Story section: the raise, the numbers, where it stands, the pitch, the dates.
+fn story<'a>(c: &'a CampaignRead, mine: bool) -> El<'a> {
+    let pct = if c.target_amount > 0.0 { (c.raised_amount / c.target_amount).clamp(0.0, 1.0) as f32 } else { 0.0 };
+    let sym = c.token_symbol.as_str();
+    let stat = |label: &'static str, value: String| -> El<'a> {
+        container(column![text(label).size(10.5).font(BOLD).color(FAINT), text(value).size(13).font(SEMIBOLD).color(TEXT_BODY)].spacing(3)).width(Fill).padding([10, 12]).style(boxed(rgba(0xffffff, 0.025), rgba(0xffffff, 0.05), 10.0)).into()
+    };
+    let fee = c.fee_bps as f64 / 100.0;
+    let mut col: Column<'a, Message> = column![
+        row![
+            chip_text(c.category.clone(), TEXT_SECONDARY),
+            chip_text(if c.is_all_or_nothing == Some(true) { "All-or-nothing".into() } else { "Flexible".into() }, INDIGO_SOFT),
+            chip_text(c.chain_name.clone(), TEXT_SECONDARY),
+        ]
+        .spacing(6),
+        column![
+            row![
+                text(fmt_amount(c.raised_amount)).size(26).font(BOLD).color(Color::WHITE),
+                text(format!("{sym} raised")).size(13).color(TEXT_SECONDARY),
+                space().width(Fill),
+                text(format!("{}%", (pct * 100.0).round())).size(16).font(BOLD).color(AMBER_TEXT),
+            ]
+            .spacing(8)
+            .align_y(Alignment::End),
+            iced::widget::progress_bar(0.0..=1.0, pct).girth(8).style(|_| iced::widget::progress_bar::Style { background: rgba(0xffffff, 0.06).into(), bar: hex(0xf59e0b).into(), border: border(Color::TRANSPARENT, 0.0, 4.0) }),
+            text(format!("Goal {} {sym}", fmt_amount(c.target_amount))).size(12).color(TEXT_SECONDARY),
+        ]
+        .spacing(8),
+        row![
+            stat("BACKERS", c.contributors_count.to_string()),
+            stat("TIME", deadline_text(c)),
+            stat("ACCORDO FEE", if c.fee_on_withdrawal == Some(false) { format!("{fee}% per contribution") } else { format!("{fee}% on withdrawal") }),
+            stat("IN THE POOL", format!("{} {sym}", fmt_amount((c.net_raised_amount - c.claimed_amount - c.refunded_amount).max(0.0)))),
+        ]
+        .spacing(8),
+    ]
+    .spacing(16);
+    if let Some(banner) = outcome(c, mine) {
+        col = col.push(banner);
+    }
+    if c.hidden == Some(true) {
+        col = col.push(text(format!("Hidden by moderators{}", c.hidden_reason.as_deref().map(|r| format!(" — {r}")).unwrap_or_default())).size(12).color(DANGER_TEXT));
+    }
+    let pitch = c.description.as_deref().map(str::trim).filter(|d| !d.is_empty()).unwrap_or("No description.");
+    col = col.push(text(pitch.to_string()).size(13).color(rgba(0xffffff, 0.82)).line_height(1.55));
+    let line = |label: &'static str, value: String| -> El<'a> {
+        row![text(label).size(12).color(TEXT_SECONDARY).width(Length::FillPortion(2)), text(value).size(12).color(TEXT_BODY).width(Length::FillPortion(3))].spacing(12).into()
+    };
+    col = col.push(
+        container(
+            column![
+                line("Created", when(Some(c.created_at.as_str()))),
+                line("Deadline", when(c.deadline.as_deref())),
+                line("Decide by", when(c.decision_deadline.as_deref())),
+                row![
+                    text("Campaign ID").size(12).color(TEXT_SECONDARY).width(Length::FillPortion(2)),
+                    row![
+                        text(crate::wallets::short_address(&c.campaign_id)).size(12).font(Font::MONOSPACE).color(TEXT_BODY),
+                        button(icon(icons::copy(), 12, MUTED)).padding(4).style(ghost(5.0, rgba(0xffffff, 0.06))).on_press(Message::CopyText(c.campaign_id.clone(), "Campaign ID")),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center)
+                    .width(Length::FillPortion(3)),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(8),
+        )
+        .width(Fill)
+        .padding([12, 14])
+        .style(inset),
+    );
+    col.into()
+}
+
+fn chip_text<'a>(t: String, c: Color) -> El<'a> {
+    container(text(t).size(11).color(c)).padding([3, 8]).style(boxed(rgba(0xffffff, 0.05), rgba(0xffffff, 0.06), 6.0)).into()
+}
+
+/// Where an ended campaign stands (the web's outcome banner).
+fn outcome<'a>(c: &CampaignRead, mine: bool) -> Option<El<'a>> {
+    let decide_by = when(c.decision_deadline.as_deref());
+    let (words, color, bg) = match c.status {
+        CampaignStatus::Ended if mine => (format!("The campaign has ended. Withdraw what was raised or refund everyone — decide by {decide_by}, after that refunds open automatically."), AMBER_TEXT, 0xf59e0b),
+        CampaignStatus::Ended => (format!("The campaign has ended. The creator decides by {decide_by} whether to withdraw or refund; if they don't, refunds open automatically."), AMBER_TEXT, 0xf59e0b),
+        CampaignStatus::Refunding => {
+            let missed = c.is_all_or_nothing == Some(true) && c.goal_reached != Some(true) && c.claimed_amount == 0.0;
+            let how = if c.fee_on_withdrawal == Some(false) { "Every backer can take back what reached the pool (the Accordo fee isn't returned)." } else { "Every backer can take back everything they contributed." };
+            (format!("{}Refunds are open. {how}", if missed { "The target wasn't reached and this was an all-or-nothing campaign. " } else { "" }), DANGER_TEXT, 0xef4444)
+        }
+        CampaignStatus::Claimed => {
+            let rest = if c.claimed_amount < c.net_raised_amount { format!(" of {} — the rest is still in the pool", fmt_amount(c.net_raised_amount)) } else { String::new() };
+            (format!("The creator withdrew {} {}{rest}.", fmt_amount(c.claimed_amount), c.token_symbol), GREEN, 0x10b981)
+        }
+        _ => return None,
+    };
+    Some(container(text(words).size(12.5).color(color).line_height(1.45)).width(Fill).padding([12, 14]).style(boxed(rgba(bg, 0.08), rgba(bg, 0.3), 10.0)).into())
+}
+
+/// The Backers section: who gave what, and what they wrote.
+fn backers<'a>(o: &'a Opened) -> El<'a> {
+    let sym = o.campaign.token_symbol.as_str();
+    match &o.backers {
+        None => text("Loading backers…").size(13).color(MUTED).into(),
+        Some(Err(e)) => text(format!("Couldn't load the backers: {e}")).size(13).color(DANGER_TEXT).into(),
+        Some(Ok(list)) if list.is_empty() => empty("No backers yet", "Share the campaign's public page — anyone can back it there, even without an account."),
+        Some(Ok(list)) => {
+            let mut col: Column<'a, Message> = column![].spacing(8);
+            for b in list {
+                let mut item = column![row![
+                    text(backer_name(b)).size(13).font(SEMIBOLD).color(Color::WHITE),
+                    space().width(Fill),
+                    text(format!("{} {sym}", fmt_amount(b.gross_amount))).size(13).font(BOLD).color(GREEN),
+                ]
+                .align_y(Alignment::Center)]
+                .spacing(4);
+                if let Some(m) = b.message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                    item = item.push(text(format!("“{m}”")).size(12.5).color(rgba(0xffffff, 0.75)).line_height(1.45));
+                }
+                item = item.push(text(when(Some(b.created_at.as_str()))).size(11).color(FAINT));
+                col = col.push(container(item).width(Fill).padding([10, 14]).style(boxed(rgba(0xffffff, 0.025), rgba(0xffffff, 0.05), 10.0)));
+            }
+            col.into()
+        }
+    }
 }
 
 fn protocol_card<'a>() -> El<'a> {

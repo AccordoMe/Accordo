@@ -161,7 +161,8 @@ pub fn amount(v: U256, decimals: u8, max_frac: usize) -> String {
     if f.is_empty() { grouped } else { format!("{grouped}.{f}") }
 }
 
-fn usd(v: U256, decimals: u8, price: Option<f64>) -> Option<String> {
+/// "≈ $123.45" for an amount at a USD price ("< $0.01" for dust).
+pub fn usd(v: U256, decimals: u8, price: Option<f64>) -> Option<String> {
     let p = price?;
     let n: f64 = crate::evm::client::format_units(v, decimals).parse().ok()?;
     let total = n * p;

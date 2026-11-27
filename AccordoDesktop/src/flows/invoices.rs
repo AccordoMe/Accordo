@@ -58,6 +58,7 @@ pub struct Share {
     pub amount: String,
 }
 
+#[derive(Clone)]
 pub struct CreateJob {
     pub draft: Draft,
     pub chain: Chain,
@@ -287,6 +288,7 @@ pub struct PayAsk {
     pub active: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct PayJob {
     pub chain: Chain,
     pub rpc_urls: Vec<String>,

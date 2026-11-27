@@ -21,6 +21,7 @@ use crate::pages::cheques_page::Draft;
 use crate::store::unsaved;
 
 /// Everything the transaction needs, fixed when the review window opens.
+#[derive(Clone)]
 pub struct Job {
     pub draft: Draft,
     pub chain: Chain,

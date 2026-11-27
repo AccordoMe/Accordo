@@ -128,7 +128,7 @@ impl App {
         let job = crate::flows::Job::CreateInvoice(Box::new(job));
         self.tx_kind = Some(job.kind());
         self.tx = Some(crate::components::tx_review::State::new(review, explorer, job));
-        Task::none()
+        self.simulate_tx()
     }
 
     #[cfg(any(feature = "drops", feature = "crowdfund"))]
@@ -183,7 +183,7 @@ impl App {
         let job = crate::flows::Job::DropClaim(Box::new(job));
         self.tx_kind = Some(job.kind());
         self.tx = Some(crate::components::tx_review::State::new(review, explorer, job));
-        Task::none()
+        self.simulate_tx()
     }
 
     #[cfg(feature = "drops")]
@@ -203,7 +203,7 @@ impl App {
         let job = crate::flows::Job::DropRefund(Box::new(job));
         self.tx_kind = Some(job.kind());
         self.tx = Some(crate::components::tx_review::State::new(review, explorer, job));
-        Task::none()
+        self.simulate_tx()
     }
 
     #[cfg(feature = "crowdfund")]
@@ -226,7 +226,7 @@ impl App {
         let job = crate::flows::Job::Launch(Box::new(job));
         self.tx_kind = Some(job.kind());
         self.tx = Some(crate::components::tx_review::State::new(review, explorer, job));
-        Task::none()
+        self.simulate_tx()
     }
 
     #[cfg(feature = "crowdfund")]
@@ -329,6 +329,6 @@ impl App {
         self.tx_kind = Some(job.kind());
         self.tx = Some(tx_review::State::new(review, explorer, job));
         self.module_mark_tx();
-        Task::none()
+        self.simulate_tx()
     }
 }

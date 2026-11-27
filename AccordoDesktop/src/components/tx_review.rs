@@ -14,6 +14,7 @@ use crate::app::Message;
 use crate::components::overlay;
 use crate::components::ui::{icon, El};
 use crate::evm::client::Stage;
+use crate::evm::simulate::Outcome;
 use crate::icons;
 use crate::theme::*;
 
@@ -93,6 +94,21 @@ pub enum TxMsg {
     OpenTx,
     /// Copy a whole address from the details.
     Copy(String),
+    /// Run the simulation again ("Check again").
+    Simulate,
+    /// A simulation's answer (its run number: an older run's answer is dropped).
+    Simulated(u64, Result<Box<Outcome>, String>),
+}
+
+/// The check before signing (flows::simulate).
+#[derive(Debug, Clone)]
+pub enum Sim {
+    /// Nothing to simulate (Accordo submits it), or not started.
+    Off,
+    Running,
+    Done(Box<Outcome>),
+    /// The node couldn't be asked — Confirm stays possible.
+    Failed(String),
 }
 
 /// A failure, with the hash when the transaction was already sent.
@@ -112,11 +128,20 @@ pub struct State<J> {
     pub explorer: Option<String>,
     /// What to run on Confirm (taken when it starts).
     pub job: Option<J>,
+    pub sim: Sim,
+    /// The latest simulation run (answers of older ones are dropped).
+    pub sim_run: u64,
 }
 
 impl<J> State<J> {
     pub fn new(review: Review, explorer: Option<String>, job: J) -> Self {
-        Self { review, step: Step::Review, hash: None, error: None, finished: None, explorer, job: Some(job) }
+        Self { review, step: Step::Review, hash: None, error: None, finished: None, explorer, job: Some(job), sim: Sim::Off, sim_run: 0 }
+    }
+
+    /// The simulation says it can only fail (the contract refuses, or the wallet can't pay):
+    /// Confirm waits for "Check again".
+    pub fn blocked(&self) -> bool {
+        matches!(&self.sim, Sim::Done(o) if o.blocks())
     }
 
     /// Signing or waiting: the window can't be closed (the transaction would go on unseen).
@@ -246,6 +271,60 @@ fn items<'a>(list: &'a [Item]) -> El<'a> {
     col.into()
 }
 
+/// The simulation at the top of the details: whether it goes through, what leaves and enters the
+/// wallet, the network fee, and whether the wallet can pay — before anything is signed.
+fn simulation<'a, J>(st: &'a State<J>) -> Option<El<'a>> {
+    if st.step != Step::Review || st.error.is_some() {
+        return None;
+    }
+    let band = |ic: iced::widget::svg::Handle, color: Color, bg: Color, border: Color, t: String| -> El<'a> {
+        container(row![icon(ic, 14, color), text(t).size(12.5).color(color)].spacing(8).align_y(Alignment::Center)).width(Fill).padding([9, 12]).style(boxed(bg, border, 8.0)).into()
+    };
+    let line = |label: &'static str, value: String, color: Color| -> El<'a> {
+        container(row![text(label).size(12.5).color(TEXT_SECONDARY).width(Length::FillPortion(2)), container(text(value).size(13).font(SEMIBOLD).color(color)).width(Length::FillPortion(3)).align_right(Fill)].spacing(12).align_y(Alignment::Center))
+            .padding([5, 0])
+            .into()
+    };
+    let mut col: Column<'a, Message> = column![container(text("SIMULATION").size(10).font(BOLD).color(FAINT)).padding(Padding { top: 6.0, right: 0.0, bottom: 4.0, left: 0.0 })].spacing(4);
+    match &st.sim {
+        Sim::Off => return None,
+        Sim::Running => col = col.push(band(icons::refresh_cw(), TEXT_SECONDARY, rgba(0xffffff, 0.03), BORDER, "Running it on the network, nothing is signed…".into())),
+        Sim::Failed(e) => col = col.push(band(icons::info(), AMBER_TEXT, rgba(0xf59e0b, 0.06), rgba(0xf59e0b, 0.2), format!("Couldn't simulate it ({e}) — you can still confirm."))),
+        Sim::Done(o) => {
+            if let Some(i) = o.steps.iter().position(|s| s.error.is_some()) {
+                let why = o.steps[i].error.clone().unwrap_or_default();
+                let what = if o.steps[i].approve { "The token permission would fail" } else { "It would fail" };
+                col = col.push(band(icons::triangle_alert(), DANGER_TEXT, rgba(0xef4444, 0.08), rgba(0xef4444, 0.25), format!("{what}: {why}")));
+            } else if let Some(short) = o.short_of() {
+                col = col.push(band(
+                    icons::triangle_alert(),
+                    DANGER_TEXT,
+                    rgba(0xef4444, 0.08),
+                    rgba(0xef4444, 0.25),
+                    format!("Not enough {}: this needs up to {} with the gas, the wallet has {}. Add {} and check again.", o.native, o.fmt_native(o.value.saturating_add(o.fee_max)), o.fmt_native(o.balance), o.fmt_native(short)),
+                ));
+            } else if o.partial {
+                col = col.push(band(icons::info(), INDIGO_SOFT, rgba(0x6366f1, 0.06), rgba(0x6366f1, 0.2), "This network's node can't run it ahead — only the gas and your balance were checked.".into()));
+            } else {
+                col = col.push(band(icons::circle_check(), GREEN, rgba(0x10b981, 0.08), rgba(0x10b981, 0.25), "Simulated just now: it goes through.".into()));
+            }
+            for c in &o.changes {
+                let out = c.outgoing();
+                col = col.push(line(if out { "You send" } else { "You get" }, c.text(), if out { DANGER_TEXT } else { GREEN }));
+            }
+            if o.steps.iter().any(|s| s.gas.is_some()) {
+                let fee = if o.fee_max > o.fee_likely { format!("≈ {} (up to {})", o.fmt_native(o.fee_likely), o.fmt_native(o.fee_max)) } else { format!("≈ {}", o.fmt_native(o.fee_likely)) };
+                col = col.push(line("Network fee", fee, TEXT_BODY));
+            }
+            if o.steps.len() > 1 {
+                col = col.push(line("Transactions", format!("{} — the token permission first", o.steps.len()), TEXT_BODY));
+            }
+            col = col.push(line("Wallet balance", o.fmt_native(o.balance), TEXT_SECONDARY));
+        }
+    }
+    Some(col.into())
+}
+
 /// The band above the buttons: the error, the warning or the result.
 fn status<'a, J>(st: &'a State<J>) -> Option<El<'a>> {
     let line = |ic: iced::widget::svg::Handle, color: Color, bg: Color, t: String| -> El<'a> {
@@ -311,13 +390,20 @@ pub fn view<'a, J>(st: &'a State<J>) -> El<'a> {
         Step::Done => "Done".into(),
     };
     let footer: El = if st.step == Step::Review && st.error.is_none() {
-        row![
-            space().width(Fill),
-            button(text("Cancel").size(13)).padding([8, 16]).style(tone_button(Tone::Dark)).on_press(msg(TxMsg::Close)),
-            button(row![icon(icons::shield_check(), 14, Color::WHITE), text(label).size(13).font(SEMIBOLD)].spacing(6).align_y(Alignment::Center)).padding([8, 18]).style(tone_button(Tone::Accent)).on_press(msg(TxMsg::Confirm)),
-        ]
-        .spacing(8)
-        .into()
+        let again = matches!(st.sim, Sim::Done(_) | Sim::Failed(_)).then(|| {
+            button(row![icon(icons::refresh_cw(), 13, TEXT_BODY), text("Check again").size(13)].spacing(6).align_y(Alignment::Center)).padding([8, 14]).style(tone_button(Tone::Dark)).on_press(msg(TxMsg::Simulate))
+        });
+        row![space().width(Fill)]
+            .extend(again.map(El::from))
+            .push(button(text("Cancel").size(13)).padding([8, 16]).style(tone_button(Tone::Dark)).on_press(msg(TxMsg::Close)))
+            .push(
+                button(row![icon(icons::shield_check(), 14, Color::WHITE), text(label).size(13).font(SEMIBOLD)].spacing(6).align_y(Alignment::Center))
+                    .padding([8, 18])
+                    .style(tone_button(Tone::Accent))
+                    .on_press_maybe((!st.blocked()).then(|| msg(TxMsg::Confirm))),
+            )
+            .spacing(8)
+            .into()
     } else if running {
         row![text("Keep the app open until it's done.").size(11.5).color(FAINT), space().width(Fill), button(text(label).size(13).font(SEMIBOLD)).padding([8, 18]).style(tone_button(Tone::Accent))].align_y(Alignment::Center).into()
     } else {
@@ -341,7 +427,7 @@ pub fn view<'a, J>(st: &'a State<J>) -> El<'a> {
     .align_y(Alignment::Center);
     let main = column![
         container(header).padding(Padding { top: 14.0, right: 14.0, bottom: 4.0, left: 28.0 }),
-        scrollable(container(items(&st.review.items)).width(Fill).padding(Padding { top: 0.0, right: 28.0, bottom: 16.0, left: 28.0 })).height(Fill).style(thin_scroll),
+        scrollable(container(column![].extend(simulation(st)).push(items(&st.review.items)).spacing(6)).width(Fill).padding(Padding { top: 0.0, right: 28.0, bottom: 16.0, left: 28.0 })).height(Fill).style(thin_scroll),
         container(space().width(Fill).height(1)).style(rule),
         container(bottom).padding([12, 20]),
     ]

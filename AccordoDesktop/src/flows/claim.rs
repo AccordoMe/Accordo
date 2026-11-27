@@ -48,11 +48,13 @@ pub struct Ask {
     pub username: String,
 }
 
+#[derive(Clone)]
 pub enum Job {
     Cheques(Box<ChequesClaim>),
     Task { cheque_id: String, recipient: String },
 }
 
+#[derive(Clone)]
 pub struct ChequesClaim {
     pub chain: Chain,
     pub rpc_urls: Vec<String>,
@@ -171,7 +173,7 @@ pub async fn prepare(ask: Ask) -> Result<Ready, String> {
             confirm: "Claim",
             items: vec![
                 Item::strong("You receive", format!("{amount_shown} {token_shown}")),
-                Item::row("From", s(c, &["cheque_owner_identificator"]).unwrap_or("—")),
+                Item::row("From", crate::components::finance::records::cheque_sender(c, "—")),
                 Item::Section("Your side"),
                 Item::row("To wallet", format!("{name} · {}", short_address(&to))),
                 Item::row("Network", ask.chain.name.clone()),
@@ -225,7 +227,7 @@ pub async fn prepare(ask: Ask) -> Result<Ready, String> {
     let mut items = vec![
         Item::strong("You receive", format!("{} {symbol}", format_units(gets, decimals))),
         Item::row(format!("Accordo fee, taken now ({}%)", f64::from(info.feeBps) / 100.0), format!("{} {symbol}", format_units(fee, decimals))),
-        Item::row("From", format!("{} · {}", s(c, &["cheque_owner_identificator"]).unwrap_or("—"), short_address(&info.from.to_checksum(None)))),
+        Item::row("From", format!("{} · {}", crate::components::finance::records::cheque_sender(c, "—"), short_address(&info.from.to_checksum(None)))),
         Item::row("Expires", expires),
         Item::row("Slot", if open { format!("{} (open: any wallet)", slot_key(&info.to, slot)) } else { "Named for your wallet".into() }),
         Item::Section("Your side"),
@@ -287,7 +289,7 @@ async fn prepare_swap(ask: Ask, contract: Address, id: B256, secret: B256, rpc: 
     let mut items = vec![
         Item::strong("You get", format!("{get} {sym_in}")),
         Item::strong("You pay", format!("{pay} {sym_out}")),
-        Item::row("From", format!("{} · {}", s(c, &["cheque_owner_identificator"]).unwrap_or("—"), short_address(&sw.spender.to_checksum(None)))),
+        Item::row("From", format!("{} · {}", crate::components::finance::records::cheque_sender(c, "—"), short_address(&sw.spender.to_checksum(None)))),
         Item::row("Expires", expires),
         Item::note(format!("You pay exactly this. The Accordo fee ({}%) comes out of what the sender gets.", f64::from(sw.feeBps) / 100.0)),
     ];

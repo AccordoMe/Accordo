@@ -203,7 +203,7 @@ pub fn update(state: &mut State, msg: SettingsMsg) -> Effect {
         SettingsMsg::VaultResetConfirm(v) => state.vault.reset_confirm = v,
         SettingsMsg::WebhookUrl(v) => state.webhook_url = v,
         SettingsMsg::WebhookDocs => state.webhook_docs = !state.webhook_docs,
-        SettingsMsg::Open(target) => return Effect::OpenWeb(target),
+        SettingsMsg::Open(target) => return Effect::OpenWeb(target.into()),
         SettingsMsg::NotYet(what) => return Effect::NotYet(what),
         _ => {}
     }

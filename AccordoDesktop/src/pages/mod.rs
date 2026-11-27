@@ -26,7 +26,7 @@ pub enum Effect {
     /// The control needs something the desktop client doesn't have yet (wallet vault, contracts).
     NotYet(&'static str),
     /// Open a page of the web app in the browser.
-    OpenWeb(&'static str),
+    OpenWeb(String),
     /// A message for the person (the form isn't right).
     Error(String),
     /// Open the date & time window; what it picks comes back to the page as a message.
@@ -37,6 +37,8 @@ pub enum Effect {
     Info(String),
     /// Copy this to the clipboard ("Link" copied).
     Copy(String, &'static str),
+    /// Copy a link to this path of the Accordo web app (the signed-in server's address in front).
+    CopyWeb(String, &'static str),
     Batch(Vec<Effect>),
     /// The drop form is filled in: review it, then sign.
     #[cfg(feature = "drops")]

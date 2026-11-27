@@ -35,6 +35,7 @@ pub mod orgs;
 pub use orgs::OrgMsg;
 mod avatar;
 mod flows;
+pub mod holdings;
 mod keys;
 mod lists;
 mod loads;
@@ -146,6 +147,12 @@ pub enum Message {
     WalletKept(Result<(), String>),
     /// Once a second while App settings → About is open: measure what the app uses.
     UsageTick,
+    /// A wallet's balances on a network: (chain id, wallet, lowercase token → balance).
+    Holdings(String, String, HashMap<String, alloy_primitives::U256>),
+    /// A form page looks whether its balances went stale.
+    HoldingsTick,
+    /// USD prices by price key ("8453:0x…", "8453:native").
+    Prices(HashMap<String, f64>),
     /// The Networks window (the gear next to the network picker).
     ChainSettings(ChainSettingsMsg),
     TokenPicker(TokenPickerMsg),
@@ -288,6 +295,11 @@ pub struct App {
     pub started_ms: i64,
     /// Accounts whose chat-key reminder was shown in this run ("Not now" lasts until the next start).
     pub chat_key_reminded: std::collections::HashSet<String>,
+    /// What each wallet holds on each network (holdings.rs): the forms' token fields and the picker.
+    pub holdings: HashMap<holdings::Key, holdings::Holdings>,
+    /// USD prices by price key (api::data::price_key), and when each was last asked for.
+    pub prices: HashMap<String, f64>,
+    pub price_asked: HashMap<String, std::time::Instant>,
     pub wallet_ui: crate::components::wallet_panel::State,
     pub toasts: Toasts,
 }
@@ -352,6 +364,9 @@ impl App {
             wallet_session: Default::default(),
             started_ms: chrono::Utc::now().timestamp_millis(),
             chat_key_reminded: Default::default(),
+            holdings: Default::default(),
+            prices: Default::default(),
+            price_asked: Default::default(),
             wallet_ui: Default::default(),
             toasts: Toasts::default(),
         };
@@ -472,6 +487,17 @@ impl App {
                 }
             }
             Message::UsageTick => self.usage.sample(self.chat.media.stats()),
+            Message::Holdings(chain, owner, found) => return self.holdings_arrived(chain, owner, found),
+            // pump_holdings, after this update, reads what went stale.
+            Message::HoldingsTick => {}
+            Message::Prices(p) => {
+                // The open picker shows them too (it keys by address alone).
+                if let Some(st) = self.token_picker.as_mut() {
+                    let prefix = format!("{}:", st.chain_id);
+                    st.prices.extend(p.iter().filter_map(|(k, v)| k.strip_prefix(&prefix).map(|t| (crate::components::token_picker::key(t), *v))));
+                }
+                self.prices.extend(p);
+            }
             Message::ChainSettings(m) => return self.chain_settings_update(m),
             Message::TokenPicker(m) => return self.token_picker_update(m),
             Message::Contacts(m) => return self.contacts_update(m),
@@ -548,7 +574,7 @@ impl App {
                         self.tx_kind = Some(ready.job.kind());
                         self.tx = Some(crate::components::tx_review::State::new(ready.review, ready.explorer, ready.job));
                         self.module_mark_tx();
-                        Task::none()
+                        self.simulate_tx()
                     }
                     Err(e) => {
                         let module = self.module_tx_failed(&e);
@@ -1015,7 +1041,7 @@ impl App {
 
     /// The form's token field: still loading / the picked token's picture.
     pub fn token_field(&self, picked: Option<&Token>) -> crate::components::finance::token_select::Field {
-        crate::components::finance::token_select::Field { loading: self.chain_tokens().is_none(), logo: picked.and_then(|t| self.logo_of(t)) }
+        crate::components::finance::token_select::Field { loading: self.chain_tokens().is_none(), logo: picked.and_then(|t| self.logo_of(t)), balance: self.field_balance(picked) }
     }
 
     pub fn logo_of(&self, t: &Token) -> Option<iced::widget::image::Handle> {
@@ -1093,6 +1119,7 @@ impl App {
             && matches!(self.chat_key, ChatKey::Ready(_))
             && self.session.as_ref().is_some_and(|s| s.user.has_key_backup))
         .then(|| iced::time::every(std::time::Duration::from_secs(300)).map(|_| Message::Session(SessionMsg::ChatKeyClock)));
+        let holdings_clock = self.form_page().then(|| iced::time::every(holdings::TICK).map(|_| Message::HoldingsTick));
         let usage_clock = (self.app_settings_open && self.app_settings_tab == app_settings_modal::Tab::About)
             .then(|| iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::UsageTick));
         let drops = self.session.is_some().then(|| {
@@ -1101,7 +1128,7 @@ impl App {
                 _ => None,
             })
         });
-        Subscription::batch([Some(keys), closed, avatars, live, dev, anim, typing_clock, drops, wallet_clock, chat_key_clock, reveal_clock, blur, usage_clock].into_iter().flatten())
+        Subscription::batch([Some(keys), closed, avatars, live, dev, anim, typing_clock, drops, wallet_clock, chat_key_clock, reveal_clock, blur, usage_clock, holdings_clock].into_iter().flatten())
     }
 }
 

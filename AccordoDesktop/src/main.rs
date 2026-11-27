@@ -123,11 +123,13 @@ pub fn main() -> iced::Result {
             app.main_window = Some(id);
             (app, iced::Task::batch([open.then(tile), boot]))
         },
-        // After every update: load the avatars the views asked for.
+        // After every update: load the avatars the views asked for…
         |app: &mut App, m| {
             let task = app.update(m);
             let api = app.session.as_ref().map(crate::api::auth::Session::api);
-            iced::Task::batch([task, avatars::pump(api.as_ref())])
+            // …and the balances a form on screen is missing (app/holdings.rs).
+            let holdings = app.pump_holdings();
+            iced::Task::batch([task, avatars::pump(api.as_ref()), holdings])
         },
         App::view_window,
     )

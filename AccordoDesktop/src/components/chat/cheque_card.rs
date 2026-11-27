@@ -308,7 +308,7 @@ pub fn view<'a>(data: &'a Value, ctx: &CardCtx<'a>) -> El<'a> {
                 container(
                     row![
                         column![
-                            text(s(&c, "cheque_owner_identificator").unwrap_or("Unknown").to_string()).size(12).font(SEMIBOLD).color(Color::WHITE),
+                            text(crate::components::finance::records::cheque_sender(&c, "Unknown")).size(12).font(SEMIBOLD).color(Color::WHITE),
                             text(from.as_deref().map(short).unwrap_or_else(|| "N/A".into())).size(11).font(Font::MONOSPACE).color(TEXT_SECONDARY),
                         ]
                         .spacing(1)

@@ -167,8 +167,22 @@ pub fn invoice_item(i: &Value) -> Option<&str> {
 pub fn invoice_note(i: &Value) -> Option<&str> {
     s(i, &["note"]).or_else(|| s(i, &["detail", "note"]))
 }
+/// Who pays, as shown: the payer list — or, for an invoice paid on a public payment page by someone
+/// without an account (billed to their wallet), the name they typed (detail.payer_name).
 pub fn invoice_payer(i: &Value) -> String {
-    s(i, &["payer_identifier"]).unwrap_or("Direct Client").to_string()
+    typed(i, "payer_name").unwrap_or_else(|| s(i, &["payer_identifier"]).unwrap_or("Direct Client").to_string())
+}
+
+/// Who a cheque is from, as shown (the web's chequeSender): the account that wrote it — or, for one
+/// paid on a public payment page by someone without an account (recorded as the page owner's),
+/// the name they typed (detail.from_name). Display only: rights follow the record's owner.
+pub fn cheque_sender(c: &Value, fallback: &str) -> String {
+    typed(c, "from_name").unwrap_or_else(|| s(c, &["cheque_owner_identificator"]).filter(|o| !o.is_empty()).unwrap_or(fallback).to_string())
+}
+
+/// A name a payer without an account typed on a payment page, kept in the record's detail.
+fn typed(v: &Value, key: &str) -> Option<String> {
+    s(v, &["detail", key]).map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(80).collect())
 }
 pub fn invoice_id(i: &Value) -> String {
     num(i, &["invoice_id"]).or_else(|| num(i, &["id"])).unwrap_or_default()
@@ -325,7 +339,7 @@ pub fn cheque_row<'a>(c: &Value, side: Side, now: i64, action: Option<El<'a>>) -
     .spacing(6)
     .align_y(Alignment::Center);
     let sub = match side {
-        Side::Incoming => sub_line("From:", s(c, &["cheque_owner_identificator"]).unwrap_or("—").to_string(), cheque_id(c), cheque_note(c)),
+        Side::Incoming => sub_line("From:", cheque_sender(c, "—"), cheque_id(c), cheque_note(c)),
         Side::Outgoing => sub_line("To:", cheque_recipient(c), cheque_id(c), cheque_note(c)),
     };
     let (exp, exp_color) = until(int(c, &["detail", "expires_at"]).unwrap_or(0), now, "Expires in", "Expired", "No expiry");
@@ -428,6 +442,20 @@ pub fn list_view<'a>(list: &'a List, kind: ListKind, title: &'a str, what: &'a s
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_payer_without_an_account_is_shown_by_the_name_they_typed() {
+        let wallet = "0xddda53257fbAd1e130BDE3Dd018fBE5E8978a9D2";
+        // Paid on /pay/dazay without an account: the cheque record is dazay's, the invoice is
+        // billed to the wallet — the typed name is who it's from.
+        let cheque = json!({"cheque_owner_identificator": "dazay", "detail": {"pay_link": true, "from": wallet, "from_name": " annonim "}});
+        assert_eq!(cheque_sender(&cheque, "—"), "annonim");
+        let invoice = json!({"payer_identifier": wallet, "detail": {"payer_name": "Bob's Bakery"}});
+        assert_eq!(invoice_payer(&invoice), "Bob's Bakery");
+        // Otherwise the account / the payer list.
+        assert_eq!(cheque_sender(&json!({"cheque_owner_identificator": "alice"}), "—"), "alice");
+        assert_eq!(invoice_payer(&json!({"payer_identifier": "@zuko"})), "@zuko");
+    }
 
     #[test]
     fn filters_like_the_picker() {

@@ -26,7 +26,7 @@ const TIMEOUT: Duration = Duration::from_secs(12);
 /// How long to wait for a transaction to be mined before giving the hash back as "pending".
 const RECEIPT_WAIT: Duration = Duration::from_secs(300);
 /// Gas limit safety buffer (evmClient.ts: gasBufferPercentage = 20).
-const GAS_BUFFER_PCT: u64 = 20;
+pub const GAS_BUFFER_PCT: u64 = 20;
 
 /// Where a transaction is (the web's TxStage): the UI shows "Approving token…" etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +130,21 @@ impl Rpc {
         hex_u256(&v).ok_or(TxError::Decode)
     }
 
+    /// What gas costs on this network right now (the same rule for sending and for the estimate).
+    pub async fn pricing(&self) -> Result<Pricing, TxError> {
+        let block = self.call("eth_getBlockByNumber", json!(["latest", false])).await?;
+        Ok(match block.get("baseFeePerGas").and_then(hex_u128) {
+            Some(base) => {
+                let tip = match self.call("eth_maxPriorityFeePerGas", json!([])).await {
+                    Ok(v) => hex_u128(&v).unwrap_or(1_000_000_000),
+                    Err(_) => 1_000_000_000,
+                };
+                Pricing::Eip1559 { base, tip }
+            }
+            None => Pricing::Legacy { price: hex_u128(&self.call("eth_gasPrice", json!([])).await?).ok_or(TxError::Decode)? },
+        })
+    }
+
     /// Waits for the receipt; Ok(hash) only if the transaction succeeded.
     pub async fn wait(&self, hash: B256) -> Result<B256, TxError> {
         let started = std::time::Instant::now();
@@ -149,6 +164,32 @@ impl Rpc {
             }
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(Duration::from_secs(2));
+        }
+    }
+}
+
+/// The price of gas: EIP-1559 (base fee + tip) or a legacy gas price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pricing {
+    Eip1559 { base: u128, tip: u128 },
+    Legacy { price: u128 },
+}
+
+impl Pricing {
+    /// What the transaction offers per gas: ethers' 2 × base + tip (the unused part isn't
+    /// charged), or the gas price + 10%. Gas limit × this is the most it can cost.
+    pub fn max_fee(self) -> u128 {
+        match self {
+            Pricing::Eip1559 { base, tip } => base.saturating_mul(2).saturating_add(tip),
+            Pricing::Legacy { price } => price.saturating_mul(11) / 10,
+        }
+    }
+
+    /// What it will most likely cost per gas: base + tip at today's base fee.
+    pub fn likely(self) -> u128 {
+        match self {
+            Pricing::Eip1559 { base, tip } => base.saturating_add(tip),
+            Pricing::Legacy { .. } => self.max_fee(),
         }
     }
 }
@@ -196,16 +237,30 @@ impl Call {
     }
 }
 
-/// An Accordo wallet able to send on one network.
+/// What a dry run wrote down: the transactions a flow would send, in order.
+pub type Plan = Arc<std::sync::Mutex<Vec<Planned>>>;
+
+/// One transaction a dry run would have sent.
+#[derive(Debug, Clone)]
+pub struct Planned {
+    pub call: Call,
+    /// The ERC-20 permission before the real transaction.
+    pub approve: bool,
+}
+
+/// An Accordo wallet able to send on one network — or, made with `planner`, one that only writes
+/// down what it would send (the review window's simulation).
 pub struct Wallet {
-    signer: PrivateKeySigner,
+    signer: Option<PrivateKeySigner>,
+    from: Address,
     pub rpc: Rpc,
     pub progress: Option<Progress>,
+    plan: Option<Plan>,
 }
 
 impl std::fmt::Debug for Wallet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Wallet").field("address", &self.signer.address()).finish_non_exhaustive()
+        f.debug_struct("Wallet").field("address", &self.from).field("dry_run", &self.plan.is_some()).finish_non_exhaustive()
     }
 }
 
@@ -213,7 +268,16 @@ impl Wallet {
     /// `key`: "0x" + 64 hex, as kept in the vault.
     pub fn new(key: &str, rpc: Rpc) -> Result<Self, TxError> {
         let signer = crate::wallets::evm::signer(key).ok_or(TxError::BadKey)?;
-        Ok(Self { signer, rpc, progress: None })
+        Ok(Self { from: signer.address(), signer: Some(signer), rpc, progress: None, plan: None })
+    }
+
+    /// A wallet with no key that signs nothing: a flow run with it reads the chain as usual
+    /// (allowances, fees) and writes its transactions into the plan instead of sending them. A
+    /// permission (approve) is taken as given and the flow goes on; the real transaction stops
+    /// it there (`TxError::Planned`) — before anything is saved to Accordo.
+    pub fn planner(from: Address, rpc: Rpc) -> (Self, Plan) {
+        let plan: Plan = Default::default();
+        (Self { signer: None, from, rpc, progress: None, plan: Some(plan.clone()) }, plan)
     }
 
     pub fn with_progress(mut self, p: Option<Progress>) -> Self {
@@ -222,7 +286,7 @@ impl Wallet {
     }
 
     pub fn address(&self) -> Address {
-        self.signer.address()
+        self.from
     }
 
     fn stage(&self, s: Stage, hash: Option<B256>) {
@@ -233,6 +297,12 @@ impl Wallet {
 
     /// Builds, signs, sends and waits (buildUniversalTransaction + sendTransaction + receipt).
     pub async fn send(&self, call: Call, stage: Stage) -> Result<B256, TxError> {
+        if let Some(plan) = &self.plan {
+            let approve = stage == Stage::Approving;
+            plan.lock().map_err(|_| TxError::Other("the plan is poisoned".into()))?.push(Planned { call, approve });
+            return if approve { Ok(B256::ZERO) } else { Err(TxError::Planned) };
+        }
+        let signer = self.signer.as_ref().ok_or(TxError::BadKey)?;
         self.stage(stage, None);
         let rpc = &self.rpc;
         let from = self.address();
@@ -242,36 +312,32 @@ impl Wallet {
                 return Err(TxError::WrongChain { want, got: chain_id });
             }
         }
+        // On Base, Accordo's Builder Code goes after the call (builder_code.rs) — before the
+        // estimate, so the gas covers it.
+        let call = Call { data: super::builder_code::tag(chain_id, call.data), ..call };
         let tx = json!({"from": from, "to": call.to, "data": call.data, "value": format!("{:#x}", call.value)});
         let nonce = hex_u64(&rpc.call("eth_getTransactionCount", json!([from, "pending"])).await?).ok_or(TxError::Decode)?;
         let estimate = hex_u64(&rpc.call("eth_estimateGas", json!([tx])).await?).ok_or(TxError::Decode)?;
         let gas_limit = estimate.saturating_mul(100 + GAS_BUFFER_PCT) / 100;
-        let block = rpc.call("eth_getBlockByNumber", json!(["latest", false])).await?;
-        let raw = match block.get("baseFeePerGas").and_then(hex_u128) {
-            Some(base) => {
-                // ethers' rule: 2 × base + tip — the unused part isn't charged.
-                let tip = match rpc.call("eth_maxPriorityFeePerGas", json!([])).await {
-                    Ok(v) => hex_u128(&v).unwrap_or(1_000_000_000),
-                    Err(_) => 1_000_000_000,
-                };
+        let raw = match rpc.pricing().await? {
+            Pricing::Eip1559 { base, tip } => {
                 let tx = TxEip1559 {
                     chain_id,
                     nonce,
                     gas_limit,
-                    max_fee_per_gas: base.saturating_mul(2).saturating_add(tip),
+                    max_fee_per_gas: Pricing::Eip1559 { base, tip }.max_fee(),
                     max_priority_fee_per_gas: tip,
                     to: TxKind::Call(call.to),
                     value: call.value,
                     access_list: Default::default(),
                     input: call.data,
                 };
-                let sig = self.signer.sign_hash_sync(&tx.signature_hash()).map_err(|_| TxError::BadKey)?;
+                let sig = signer.sign_hash_sync(&tx.signature_hash()).map_err(|_| TxError::BadKey)?;
                 tx.into_signed(sig).encoded_2718()
             }
-            None => {
-                let price = hex_u128(&rpc.call("eth_gasPrice", json!([])).await?).ok_or(TxError::Decode)?;
-                let tx = TxLegacy { chain_id: Some(chain_id), nonce, gas_price: price.saturating_mul(11) / 10, gas_limit, to: TxKind::Call(call.to), value: call.value, input: call.data };
-                let sig = self.signer.sign_hash_sync(&tx.signature_hash()).map_err(|_| TxError::BadKey)?;
+            legacy @ Pricing::Legacy { .. } => {
+                let tx = TxLegacy { chain_id: Some(chain_id), nonce, gas_price: legacy.max_fee(), gas_limit, to: TxKind::Call(call.to), value: call.value, input: call.data };
+                let sig = signer.sign_hash_sync(&tx.signature_hash()).map_err(|_| TxError::BadKey)?;
                 tx.into_signed(sig).encoded_2718()
             }
         };

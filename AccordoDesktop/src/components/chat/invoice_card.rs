@@ -226,7 +226,7 @@ pub fn view<'a>(data: &'a Value, ctx: &CardCtx<'a>) -> El<'a> {
             };
             let merchant_addr = s(&c, "merchant_address").or_else(|| s(&detail, "merchant")).map(str::to_string);
             let payer_addr = s(&c, "payer_address").or_else(|| s(&detail, "payer_address")).filter(|a| !a.eq_ignore_ascii_case(ZERO_ADDRESS)).map(str::to_string);
-            let payer = s(&c, "payer_identifier").unwrap_or("Direct Client").to_string();
+            let payer = crate::components::finance::records::invoice_payer(&c);
             let mut people = column![
                 person("Merchant (Issuer)", icons::user(), creator.clone(), merchant_addr, "On-Chain Vault", "Merchant Address"),
                 person("Billed Client (Payer)", icons::wallet(), payer, payer_addr, "Anyone / Open Payer", "Client Address"),

@@ -148,9 +148,8 @@ pub fn summary(kinds: &[String]) -> String {
 /// home folder), private to the user — cheque claim secrets are in it.
 pub fn save_copy(account: &str, server: &str) -> std::io::Result<PathBuf> {
     let mine: Vec<Record> = list().into_iter().filter(|r| is_mine(r, account, server)).collect();
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).ok_or_else(|| std::io::Error::other("no home folder"))?;
-    let downloads = home.join("Downloads");
-    let dir = if downloads.is_dir() { downloads } else { home };
+    let downloads = crate::components::file_picker::downloads();
+    let dir = if downloads.is_dir() { downloads } else { crate::components::file_picker::home() };
     let path = dir.join(format!("accordo-unsaved-records-{}.json", chrono::Local::now().format("%Y-%m-%d")));
     let bytes = serde_json::to_vec_pretty(&mine).map_err(std::io::Error::other)?;
     #[cfg(unix)]

@@ -33,6 +33,23 @@ impl App {
         Ok(w)
     }
 
+    /// Runs the open review's transactions ahead, unsigned (flows::simulate): the window shows
+    /// whether they go through, what moves in the wallet and the fee before Confirm.
+    pub(super) fn simulate_tx(&mut self) -> Task<Message> {
+        use crate::components::tx_review::{Sim, TxMsg};
+        let Some(tx) = self.tx.as_mut() else { return Task::none() };
+        let Some(job) = tx.job.clone() else { return Task::none() };
+        let Some(api) = self.session.as_ref().map(Session::api) else { return Task::none() };
+        if job.signer().is_none() {
+            tx.sim = Sim::Off;
+            return Task::none();
+        }
+        tx.sim_run += 1;
+        tx.sim = Sim::Running;
+        let run = tx.sim_run;
+        Task::perform(crate::flows::simulate(job, api), move |r| Message::Tx(TxMsg::Simulated(run, r.map(Box::new))))
+    }
+
     pub(super) fn signing_my_wallet(&mut self) -> Result<crate::flows::claim::MyWallet, Task<Message>> {
         self.signing_wallet().map(|w| crate::flows::claim::MyWallet { address: w.address, name: w.name, vault: w.vault })
     }
@@ -68,6 +85,18 @@ impl App {
                 Task::none()
             }
             TxMsg::Copy(a) => Task::batch([iced::clipboard::write(a), self.toasts.show(Kind::Success, "Address copied")]),
+            TxMsg::Simulate => self.simulate_tx(),
+            TxMsg::Simulated(run, r) => {
+                use crate::components::tx_review::Sim;
+                // Only the latest run's answer, and only while the window still asks.
+                if run == tx.sim_run && tx.step == Step::Review && tx.job.is_some() {
+                    tx.sim = match r {
+                        Ok(o) => Sim::Done(o),
+                        Err(e) => Sim::Failed(e),
+                    };
+                }
+                Task::none()
+            }
             TxMsg::CopyHash => match tx.hash {
                 Some(h) => Task::batch([iced::clipboard::write(format!("{h:#x}")), self.toasts.show(Kind::Success, "Transaction hash copied")]),
                 None => Task::none(),
@@ -81,6 +110,10 @@ impl App {
                 Task::none()
             }
             TxMsg::Confirm => {
+                // The simulation says it can only fail: not until "Check again" says otherwise.
+                if tx.blocked() {
+                    return Task::none();
+                }
                 let Some(job) = tx.job.take() else { return Task::none() };
                 let Some(api) = self.session.as_ref().map(Session::api) else { return Task::none() };
                 // AccordoTask claims: Accordo submits them — no key is opened.
@@ -91,27 +124,8 @@ impl App {
                         return crate::flows::run(move |_, _| crate::flows::claim::run_task(id, to, api));
                     }
                 }
-                let (vault, address, urls, chain_id) = match &job {
-                    Job::Cheque(j) => (j.wallet_vault.clone(), j.wallet_address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    Job::Claim(c) => match c.as_ref() {
-                        crate::flows::claim::Job::Cheques(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                        crate::flows::claim::Job::Task { .. } => unreachable!("handled above"),
-                    },
-                    Job::CreateInvoice(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    Job::PayInvoice(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    #[cfg(feature = "drops")]
-                    Job::Drop(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    #[cfg(feature = "drops")]
-                    Job::DropRefund(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    #[cfg(feature = "drops")]
-                    Job::DropClaim(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    #[cfg(feature = "crowdfund")]
-                    Job::Launch(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    #[cfg(feature = "crowdfund")]
-                    Job::Back(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                    #[cfg(feature = "crowdfund")]
-                    Job::Campaign(j) => (j.wallet.vault.clone(), j.wallet.address.clone(), j.rpc_urls.clone(), j.chain.evm_id()),
-                };
+                let Some(side) = job.signer() else { return Task::none() };
+                let (vault, address, urls, chain_id) = (side.vault, side.address, side.rpc_urls, side.chain_id);
                 // The key leaves the vault only here, into the signer; the string is wiped right after.
                 let wallet = match self.wallet_session.open(&vault) {
                     Ok(key) => crate::evm::client::Rpc::new(urls, chain_id).and_then(|rpc| crate::evm::client::Wallet::new(&key, rpc)).map_err(|e| e.to_string()),
@@ -141,33 +155,15 @@ impl App {
                 };
                 // A token may need the permission first (skipped when it's already given).
                 tx.step = if tx.review.approve { Step::Approving } else { Step::Signing };
-                match job {
-                    Job::Cheque(j) => crate::flows::run(move |progress, out| crate::flows::cheques::run(*j, wallet.with_progress(Some(progress)), api, out)),
-                    Job::Claim(c) => match *c {
-                        crate::flows::claim::Job::Cheques(j) => crate::flows::run(move |progress, out| crate::flows::claim::run_cheques(*j, wallet.with_progress(Some(progress)), api, out)),
-                        crate::flows::claim::Job::Task { .. } => Task::none(),
-                    },
-                    Job::CreateInvoice(j) => crate::flows::run(move |progress, out| crate::flows::invoices::run_create(*j, wallet.with_progress(Some(progress)), api, out)),
-                    Job::PayInvoice(j) => crate::flows::run(move |progress, out| crate::flows::invoices::run_pay(*j, wallet.with_progress(Some(progress)), api, out)),
-                    #[cfg(feature = "drops")]
-                    Job::Drop(j) => crate::flows::run(move |progress, out| crate::flows::drops::run_create(*j, wallet.with_progress(Some(progress)), api, out)),
-                    #[cfg(feature = "drops")]
-                    Job::DropRefund(j) => crate::flows::run(move |progress, out| crate::flows::drops::run_refund(*j, wallet.with_progress(Some(progress)), api, out)),
-                    #[cfg(feature = "drops")]
-                    Job::DropClaim(j) => crate::flows::run(move |progress, out| crate::flows::drops::run_claim(*j, wallet.with_progress(Some(progress)), api, out)),
-                    #[cfg(feature = "crowdfund")]
-                    Job::Launch(j) => crate::flows::run(move |progress, out| crate::flows::crowdfund::run_launch(*j, wallet.with_progress(Some(progress)), api, out)),
-                    #[cfg(feature = "crowdfund")]
-                    Job::Back(j) => crate::flows::run(move |progress, out| crate::flows::crowdfund::run_back(*j, wallet.with_progress(Some(progress)), api, out)),
-                    #[cfg(feature = "crowdfund")]
-                    Job::Campaign(j) => crate::flows::run(move |progress, out| crate::flows::crowdfund::run_action(*j, wallet.with_progress(Some(progress)), api, out)),
-                }
+                crate::flows::run(move |progress, out| crate::flows::run_job(job, wallet.with_progress(Some(progress)), api, out))
             }
             m @ TxMsg::Done(_) => {
                 tx.apply(&m);
                 match &m {
                     TxMsg::Done(Ok(f)) => {
                         use crate::components::finance::records::ListKind;
+                        // The wallet's balances changed: read again (pump_holdings).
+                        self.holdings_spent();
                         use crate::flows::Kind;
                         if !f.saved {
                             tracing::warn!("an on-chain record couldn't be saved to Accordo; kept on this computer");
@@ -254,6 +250,10 @@ impl App {
             Effect::Run(t) => t,
             Effect::Info(t) => self.toasts.show(Kind::Success, t),
             Effect::Copy(value, what) => Task::batch([iced::clipboard::write(value), self.toasts.show(Kind::Success, format!("{what} copied"))]),
+            Effect::CopyWeb(path, what) => {
+                let base = self.session.as_ref().map(|s| crate::api::client::normalize_base(&s.base)).unwrap_or_default();
+                Task::batch([iced::clipboard::write(format!("{base}{path}")), self.toasts.show(Kind::Success, format!("{what} copied"))])
+            }
             Effect::Contacts(target) => self.contacts_update(crate::components::contact_picker::ContactsMsg::Open(target)),
             Effect::Batch(list) => Task::batch(list.into_iter().map(|e| self.apply(e)).collect::<Vec<_>>()),
             #[cfg(feature = "drops")]

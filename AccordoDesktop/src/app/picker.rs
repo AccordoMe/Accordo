@@ -25,7 +25,14 @@ impl App {
                 Purpose::Drop => self.drops.form.token.clone(),
                 Purpose::Module => None,
             };
-            self.token_picker = Some(token_picker::State::new(purpose, self.chain_id.clone(), picked.as_ref()));
+            let mut st = token_picker::State::new(purpose, self.chain_id.clone(), picked.as_ref());
+            // What the forms already read: shown at once, the picker's own read refreshes it.
+            if let Some(h) = self.holdings(&self.chain_id) {
+                st.balances = h.by_token.clone();
+            }
+            let prefix = format!("{}:", self.chain_id);
+            st.prices.extend(self.prices.iter().filter_map(|(k, v)| k.strip_prefix(&prefix).map(|t| (token_picker::key(t), *v))));
+            self.token_picker = Some(st);
             let mut tasks = vec![self.load_tokens(), iced::widget::operation::focus(token_picker::SEARCH), self.request_logos(), self.picker_check()];
             if purpose != Purpose::Module {
                 tasks.push(self.picker_balances());
@@ -100,6 +107,9 @@ impl App {
                 }
                 st.balances = b;
                 st.balances_loading = false;
+                let found = st.balances.clone();
+                self.holdings_from_picker(&chain, &found);
+                let Some(st) = self.token_picker.as_mut() else { return Task::none() };
                 let held: Vec<String> = st.balances.iter().filter(|(_, v)| !v.is_zero()).map(|(k, _)| k.clone()).collect();
                 let (Some(session), false) = (&self.session, held.is_empty()) else { return self.request_logos() };
                 let keys: Vec<String> = held.iter().map(|k| crate::api::data::price_key(&chain, k)).collect();
@@ -110,7 +120,11 @@ impl App {
                 });
                 return Task::batch([prices, self.request_logos()]);
             }
-            TokenPickerMsg::Prices(p) => st.prices.extend(p),
+            TokenPickerMsg::Prices(p) => {
+                st.prices.extend(p.clone());
+                // The forms show them too.
+                self.prices.extend(p.into_iter().map(|(k, v)| (crate::api::data::price_key(&chain, &k), v)));
+            }
             TokenPickerMsg::Checked(k, r) => {
                 st.checks.insert(k, token_picker::Check::Done(r));
             }

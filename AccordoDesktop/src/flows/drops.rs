@@ -342,6 +342,7 @@ pub struct CreateAsk {
     pub owner: String,
 }
 
+#[derive(Clone)]
 pub struct CreateJob {
     pub draft: Draft,
     pub chain: Chain,
@@ -445,6 +446,7 @@ pub async fn run_create(job: CreateJob, wallet: Wallet, api: Api, out: mpsc::Unb
 
 // ── claiming your share ──
 
+#[derive(Clone)]
 pub struct ClaimJob {
     pub chain: Chain,
     pub rpc_urls: Vec<String>,
@@ -541,6 +543,7 @@ pub async fn run_claim(job: ClaimJob, wallet: Wallet, api: Api, out: mpsc::Unbou
 
 // ── taking back the rest ──
 
+#[derive(Clone)]
 pub struct RefundJob {
     pub chain: Chain,
     pub rpc_urls: Vec<String>,
